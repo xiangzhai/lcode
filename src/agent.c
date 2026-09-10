@@ -16,14 +16,26 @@ static const char *SYSTEM_PROMPT =
     "inspect or modify the workspace. Think step by step, then act. "
     "When the task is complete, reply to the user with a concise summary.";
 
-static json_object *build_messages(void)
+static json_object *build_messages(AgentConfig *cfg)
 {
     json_object *messages = json_object_new_array();
 
+    const char *base = (cfg->system_prompt && *cfg->system_prompt)
+                           ? cfg->system_prompt
+                           : SYSTEM_PROMPT;
+
+    char *merged = NULL;
+    if (cfg->append_system_prompt && *cfg->append_system_prompt) {
+        if (asprintf(&merged, "%s\n\n%s", base, cfg->append_system_prompt) < 0)
+            merged = NULL;
+    }
+
     json_object *sys = json_object_new_object();
     json_object_object_add(sys, "role", json_object_new_string("system"));
-    json_object_object_add(sys, "content", json_object_new_string(SYSTEM_PROMPT));
+    json_object_object_add(sys, "content",
+                           json_object_new_string(merged ? merged : base));
     json_object_array_add(messages, sys);
+    free(merged);
 
     return messages;
 }
@@ -154,10 +166,19 @@ int agent_run(AgentConfig *cfg)
     char url[1024];
     snprintf(url, sizeof(url), "%s/chat/completions", cfg->base_url);
 
-    json_object *messages = build_messages();
+    json_object *messages = build_messages(cfg);
 
     printf("lcode - coding agent (%s)\n", cfg->model);
     printf("Type your request, Ctrl-D to exit.\n");
+
+    if (cfg->initial_prompt && *cfg->initial_prompt) {
+        json_object *um = json_object_new_object();
+        json_object_object_add(um, "role", json_object_new_string("user"));
+        json_object_object_add(um, "content",
+                               json_object_new_string(cfg->initial_prompt));
+        json_object_array_add(messages, um);
+        run_turn(cfg, messages, url);
+    }
 
     while (1) {
         char *line = readline("\n\033[1;36m> \033[0m");

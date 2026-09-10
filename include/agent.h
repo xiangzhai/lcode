@@ -5,6 +5,9 @@ typedef struct {
     const char *api_key;
     const char *base_url;
     const char *model;
+    const char *system_prompt;
+    const char *append_system_prompt;
+    const char *initial_prompt;
     int max_iterations;
 } AgentConfig;
 

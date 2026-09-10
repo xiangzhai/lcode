@@ -96,17 +96,34 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
 命令行参数（会覆盖对应环境变量）：
 
 ```
---model <name>         指定模型，默认 deepseek-v4-flash
---base-url <url>       指定 API 基础地址
---max-iterations <n>   单轮最多工具调用轮数，默认 16
--h, --help             显示帮助
+--model <name>                     指定模型，默认 deepseek-v4-flash
+--base-url <url>                   指定 API 基础地址
+--system-prompt <text>             替换内置 system prompt
+--system-prompt-file <path>        从文件读取 system prompt（替换内置）
+--append-system-prompt <text>      在内置 system prompt 后追加指令
+--append-system-prompt-file <path> 追加文件内容到 system prompt
+--prompt <text>                    启动时预加载首条用户提示词并自动发送
+--prompt-file <path>               从文件读取首条用户提示词
+--max-iterations <n>               单轮最多工具调用轮数，默认 16
+-h, --help                         显示帮助
 ```
 
 示例：
 
 ```sh
 ./build/lcode --model deepseek-v4-flash
+./build/lcode --append-system-prompt "始终使用中文回答"
+./build/lcode --prompt "先列出当前目录，然后总结项目结构"
+./build/lcode --system-prompt-file prompts/reviewer.md --prompt-file prompts/task.md
 ```
+
+> 预加载的首条提示词会在进入 REPL 前自动发送，之后仍可继续交互输入；`--prompt` 与
+> `--prompt-file` 同时给出时，以文件内容为准（按参数出现顺序，后出现者覆盖前者）。
+
+启动时会自动读取**当前目录**下的 `.lcode.md`，将其内容追加到 system prompt（等价于
+`--append-system-prompt-file .lcode.md`）。若显式指定了 `--append-system-prompt` 或
+`--append-system-prompt-file`，则以显式参数为准，不再加载 `.lcode.md`。可用它固化项目的
+开发与调试约定，例如仓库自带的 `.lcode.md`。
 
 进入 REPL 后直接输入需求，例如：
 
