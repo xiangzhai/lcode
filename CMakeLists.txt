@@ -3,6 +3,7 @@ project(lcode C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
@@ -12,9 +13,9 @@ set(CMAKE_C_FLAGS_RELEASE "-O2")
 set(CMAKE_C_FLAGS_DEBUG "-g -O0")
 
 find_package(PkgConfig REQUIRED)
+find_package(Readline REQUIRED)
 pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl)
 pkg_check_modules(JSONC REQUIRED IMPORTED_TARGET json-c)
-pkg_check_modules(READLINE REQUIRED IMPORTED_TARGET readline)
 
 add_executable(lcode
   src/main.c
@@ -30,5 +31,5 @@ target_compile_options(lcode PRIVATE -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(lcode PRIVATE
   PkgConfig::CURL
   PkgConfig::JSONC
-  PkgConfig::READLINE
+  ${READLINE_LIBRARY}
 )
