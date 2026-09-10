@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #define APPEND_PROMPT_FILE ".lcode.md"
+#define DEFAULT_MAX_ITERATIONS 64
 
 static const char *env_or(const char *name, const char *fallback)
 {
@@ -76,7 +77,7 @@ static void usage(const char *prog)
             "  --resume                    resume the most recently updated session\n"
             "  --list-sessions             list saved sessions and exit\n"
             "  --non-interactive, -y       let the model decide; never ask, exit after --prompt\n"
-            "  --max-iterations <n>        max tool-call rounds per turn (default: 16)\n"
+            "  --max-iterations <n>        max tool-call rounds per turn (default: 64)\n"
             "  -h, --help                  show this help\n"
             "env: DEEPSEEK_API_KEY (required), DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, LCODE_HOME\n"
             "note: .lcode.md in the current directory is auto-appended to the system prompt\n",
@@ -94,7 +95,7 @@ int main(int argc, char **argv)
     cfg.initial_prompt = NULL;
     cfg.session = NULL;
     cfg.non_interactive = 0;
-    cfg.max_iterations = 16;
+    cfg.max_iterations = DEFAULT_MAX_ITERATIONS;
 
     char *owned[10];
     int owned_n = 0;
@@ -143,7 +144,7 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[i], "--max-iterations") == 0 && i + 1 < argc) {
             cfg.max_iterations = atoi(argv[++i]);
             if (cfg.max_iterations <= 0)
-                cfg.max_iterations = 16;
+                cfg.max_iterations = DEFAULT_MAX_ITERATIONS;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             usage(argv[0]);
             return 0;

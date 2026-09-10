@@ -113,7 +113,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
 --list-sessions                    列出已保存的 session 并退出
 --non-interactive, -y              非交互模式：由模型自行决策，不询问用户；
                                    若同时给出 --prompt/--prompt-file，跑完即退出
---max-iterations <n>               单轮最多工具调用轮数，默认 16
+--max-iterations <n>               单轮最多工具调用轮数，默认 64
 -h, --help                         显示帮助
 ```
 
