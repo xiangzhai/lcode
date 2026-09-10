@@ -22,12 +22,12 @@
 
 | 依赖 | 用途 | 最低建议版本 |
 | --- | --- | --- |
-| CMake | 构建系统 | 3.16 |
-| GCC / Clang | C 编译器（需支持 C11） | GCC 9 / Clang 10 |
+| CMake | 构建系统 | 3.13 |
+| GCC / Clang | C 编译器（需支持 C11） | GCC 8 / Clang 8 |
 | pkg-config | 查找依赖库 | 0.29 |
 | libcurl（开发包） | HTTP 请求 | 7.58 |
-| json-c（开发包） | JSON 解析与序列化 | 0.13 |
-| GNU Readline（开发包） | 交互式输入与历史 | 8.0 |
+| json-c（开发包） | JSON 解析与序列化 | 0.12 |
+| GNU Readline（开发包） | 交互式输入与历史 | 7.0 |
 
 ### 各发行版安装命令
 
