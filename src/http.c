@@ -1,4 +1,5 @@
 #include "http.h"
+#include "version.h"
 
 #include <curl/curl.h>
 #include <stdio.h>
@@ -73,7 +74,7 @@ HttpResponse http_post_json(const char *url, const char *api_key, const char *js
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 600L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "lcode/0.1");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "lcode/" LCODE_VERSION);
 
     CURLcode rc = curl_easy_perform(curl);
     if (rc != CURLE_OK) {

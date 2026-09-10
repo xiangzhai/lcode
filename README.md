@@ -115,6 +115,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
                                    若同时给出 --prompt/--prompt-file，跑完即退出
 --max-iterations <n>               单轮最多工具调用轮数，默认 64
 -h, --help                         显示帮助
+-V, --version                      显示版本并退出
 ```
 
 示例：

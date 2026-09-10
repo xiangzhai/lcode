@@ -1,6 +1,7 @@
 #include "agent.h"
 #include "http.h"
 #include "session.h"
+#include "version.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -79,6 +80,7 @@ static void usage(const char *prog)
             "  --non-interactive, -y       let the model decide; never ask, exit after --prompt\n"
             "  --max-iterations <n>        max tool-call rounds per turn (default: 64)\n"
             "  -h, --help                  show this help\n"
+            "  -V, --version               show version and exit\n"
             "env: DEEPSEEK_API_KEY (required), DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, LCODE_HOME\n"
             "note: LCODE.md in the current directory is auto-appended to the system prompt\n",
             prog);
@@ -147,6 +149,9 @@ int main(int argc, char **argv)
                 cfg.max_iterations = DEFAULT_MAX_ITERATIONS;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             usage(argv[0]);
+            return 0;
+        } else if (strcmp(argv[i], "-V") == 0 || strcmp(argv[i], "--version") == 0) {
+            printf("lcode %s\n", LCODE_VERSION);
             return 0;
         } else {
             fprintf(stderr, "error: unknown argument '%s'\n", argv[i]);
