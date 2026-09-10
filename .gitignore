@@ -1,0 +1,33 @@
+# Build output
+/build/
+build/
+cmake-build-*/
+
+# CMake artifacts
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+cmake_install.cmake
+CTestTestfile.cmake
+
+# Compiled objects and binaries
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+lcode
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# Misc
+*.log
+core
