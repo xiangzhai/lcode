@@ -6,8 +6,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/select.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <termios.h>
+#include <unistd.h>
 
 #define MAX_TOOL_OUTPUT (256 * 1024)
 #define MAX_READ_SIZE (512 * 1024)
@@ -254,6 +257,210 @@ static char *tool_run_shell(json_object *args)
     return sb_steal(&sb);
 }
 
+static int g_non_interactive = 0;
+
+void tools_set_non_interactive(int enabled)
+{
+    g_non_interactive = enabled ? 1 : 0;
+}
+
+static int menu_is_tty(void)
+{
+    return isatty(STDIN_FILENO) && isatty(STDOUT_FILENO);
+}
+
+static int wait_input(int ms)
+{
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(STDIN_FILENO, &fds);
+
+    struct timeval tv;
+    tv.tv_sec = ms / 1000;
+    tv.tv_usec = (ms % 1000) * 1000;
+    return select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv);
+}
+
+enum {
+    KEY_UP = 0,
+    KEY_DOWN,
+    KEY_ENTER,
+    KEY_CANCEL,
+    KEY_OTHER,
+    KEY_DIGIT = 100,
+};
+
+static int read_key(void)
+{
+    unsigned char c;
+    if (read(STDIN_FILENO, &c, 1) != 1)
+        return KEY_CANCEL;
+
+    if (c == 0x1b) {
+        if (wait_input(30) <= 0)
+            return KEY_CANCEL;
+        unsigned char c2;
+        if (read(STDIN_FILENO, &c2, 1) != 1)
+            return KEY_CANCEL;
+        if (c2 == '[' || c2 == 'O') {
+            if (wait_input(30) <= 0)
+                return KEY_CANCEL;
+            unsigned char c3;
+            if (read(STDIN_FILENO, &c3, 1) != 1)
+                return KEY_CANCEL;
+            if (c3 == 'A')
+                return KEY_UP;
+            if (c3 == 'B')
+                return KEY_DOWN;
+            return KEY_OTHER;
+        }
+        return KEY_CANCEL;
+    }
+
+    if (c == '\r' || c == '\n')
+        return KEY_ENTER;
+    if (c == 0x03 || c == 0x04 || c == 'q' || c == 'Q')
+        return KEY_CANCEL;
+    if (c >= '1' && c <= '9')
+        return KEY_DIGIT + (c - '0');
+    if (c == 'j')
+        return KEY_DOWN;
+    if (c == 'k')
+        return KEY_UP;
+    return KEY_OTHER;
+}
+
+static void render_menu(const char *question, char *const *opts, int n, int sel)
+{
+    printf("\r\033[2K\033[1;36m? %s\033[0m\n", question);
+    for (int i = 0; i < n; i++) {
+        printf("\033[2K");
+        if (i == sel)
+            printf("\033[1;36m> %d) %s\033[0m\n", i + 1, opts[i]);
+        else
+            printf("  %d) %s\n", i + 1, opts[i]);
+    }
+    fflush(stdout);
+}
+
+static char *selection_result(int idx, char *const *opts)
+{
+    char *msg = NULL;
+    if (asprintf(&msg, "user selected option %d: %s", idx + 1, opts[idx]) < 0)
+        return xstrdup("user made a selection");
+    return msg;
+}
+
+static char *ask_interactive(const char *question, char *const *opts, int n)
+{
+    struct termios orig, raw;
+    if (tcgetattr(STDIN_FILENO, &orig) != 0)
+        return NULL;
+
+    raw = orig;
+    raw.c_lflag &= ~(tcflag_t)(ICANON | ECHO | ISIG);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0)
+        return NULL;
+
+    int sel = 0;
+    int chosen = -1;
+
+    printf("\0337");
+    render_menu(question, opts, n, sel);
+
+    while (1) {
+        int k = read_key();
+        if (k == KEY_UP) {
+            sel = (sel + n - 1) % n;
+        } else if (k == KEY_DOWN) {
+            sel = (sel + 1) % n;
+        } else if (k >= KEY_DIGIT + 1 && k <= KEY_DIGIT + n) {
+            chosen = k - KEY_DIGIT - 1;
+            break;
+        } else if (k == KEY_ENTER) {
+            chosen = sel;
+            break;
+        } else if (k == KEY_CANCEL) {
+            break;
+        } else {
+            continue;
+        }
+        printf("\0338\033[J");
+        render_menu(question, opts, n, sel);
+    }
+
+    tcsetattr(STDIN_FILENO, TCSANOW, &orig);
+    printf("\0338\033[J");
+    fflush(stdout);
+
+    if (chosen < 0)
+        return xstrdup("user cancelled the selection");
+    return selection_result(chosen, opts);
+}
+
+static char *ask_plain(const char *question, char *const *opts, int n)
+{
+    printf("? %s\n", question);
+    for (int i = 0; i < n; i++)
+        printf("  %d) %s\n", i + 1, opts[i]);
+    printf("Enter choice [1-%d]: ", n);
+    fflush(stdout);
+
+    char line[64];
+    if (!fgets(line, sizeof(line), stdin))
+        return xstrdup("user cancelled the selection");
+
+    int idx = atoi(line) - 1;
+    if (idx < 0 || idx >= n)
+        return xstrdup("user did not make a valid selection");
+    return selection_result(idx, opts);
+}
+
+static char *tool_ask_user(json_object *args)
+{
+    if (g_non_interactive)
+        return xstrdup("non-interactive mode is enabled: the user has delegated this "
+                       "decision to you. Pick the most reasonable option yourself and "
+                       "continue the task without asking again.");
+
+    const char *question = arg_str(args, "question");
+    if (!question)
+        return xstrdup("error: missing required argument 'question'");
+
+    json_object *opts_json = NULL;
+    if (!args || !json_object_object_get_ex(args, "options", &opts_json) ||
+        !opts_json || json_object_get_type(opts_json) != json_type_array)
+        return xstrdup("error: missing required argument 'options'");
+
+    int n = (int)json_object_array_length(opts_json);
+    if (n <= 0)
+        return xstrdup("error: 'options' must contain at least one choice");
+
+    char **opts = calloc((size_t)n, sizeof(char *));
+    if (!opts)
+        return xstrdup("error: out of memory");
+
+    for (int i = 0; i < n; i++) {
+        json_object *o = json_object_array_get_idx(opts_json, i);
+        if (json_object_get_type(o) != json_type_string) {
+            free(opts);
+            return xstrdup("error: each option must be a string");
+        }
+        opts[i] = (char *)json_object_get_string(o);
+    }
+
+    char *result = NULL;
+    if (menu_is_tty())
+        result = ask_interactive(question, opts, n);
+    if (!result)
+        result = ask_plain(question, opts, n);
+
+    free(opts);
+    return result;
+}
+
 char *tools_execute(const char *name, json_object *args)
 {
     if (!name)
@@ -261,6 +468,8 @@ char *tools_execute(const char *name, json_object *args)
 
     if (strcmp(name, "read_file") == 0)
         return tool_read_file(args);
+    if (strcmp(name, "ask_user") == 0)
+        return tool_ask_user(args);
     if (strcmp(name, "write_file") == 0)
         return tool_write_file(args);
     if (strcmp(name, "list_dir") == 0)
@@ -345,6 +554,25 @@ json_object *tools_schema(void)
         "run_shell",
         "Run a shell command and return its combined output and exit status.",
         p4, required1("command")));
+
+    json_object *p5 = json_object_new_object();
+    json_object_object_add(p5, "question", prop("string", "The question to ask the user"));
+    json_object *opts_prop = json_object_new_object();
+    json_object_object_add(opts_prop, "type", json_object_new_string("array"));
+    json_object_object_add(opts_prop, "description",
+                           json_object_new_string("The choices to present to the user"));
+    json_object *items = json_object_new_object();
+    json_object_object_add(items, "type", json_object_new_string("string"));
+    json_object_object_add(opts_prop, "items", items);
+    json_object_object_add(p5, "options", opts_prop);
+    json_object *r5 = json_object_new_array();
+    json_object_array_add(r5, json_object_new_string("question"));
+    json_object_array_add(r5, json_object_new_string("options"));
+    json_object_array_add(tools, make_tool(
+        "ask_user",
+        "Ask the user to choose one option from a list using an interactive menu. "
+        "Use this whenever a decision needs the user's input before proceeding.",
+        p5, r5));
 
     return tools;
 }

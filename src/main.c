@@ -71,6 +71,7 @@ static void usage(const char *prog)
             "  --append-system-prompt-file <path> append file contents to the system prompt\n"
             "  --prompt <text>             preload an initial user prompt\n"
             "  --prompt-file <path>        read the initial user prompt from a file\n"
+            "  --non-interactive, -y       let the model decide; never ask, exit after --prompt\n"
             "  --max-iterations <n>        max tool-call rounds per turn (default: 16)\n"
             "  -h, --help                  show this help\n"
             "env: DEEPSEEK_API_KEY (required), DEEPSEEK_BASE_URL, DEEPSEEK_MODEL\n"
@@ -93,6 +94,7 @@ int main(int argc, char **argv)
     cfg.system_prompt = NULL;
     cfg.append_system_prompt = NULL;
     cfg.initial_prompt = NULL;
+    cfg.non_interactive = 0;
     cfg.max_iterations = 16;
 
     char *owned[8];
@@ -129,6 +131,8 @@ int main(int argc, char **argv)
                 cfg.append_system_prompt = content;
             else
                 cfg.initial_prompt = content;
+        } else if (strcmp(argv[i], "--non-interactive") == 0 || strcmp(argv[i], "-y") == 0) {
+            cfg.non_interactive = 1;
         } else if (strcmp(argv[i], "--max-iterations") == 0 && i + 1 < argc) {
             cfg.max_iterations = atoi(argv[++i]);
             if (cfg.max_iterations <= 0)

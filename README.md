@@ -11,6 +11,8 @@
   - `write_file` —— 写入（覆盖）文本文件
   - `list_dir` —— 列出目录内容（类型与大小）
   - `run_shell` —— 执行 shell 命令并返回输出与退出码
+  - `ask_user` —— 当需要用户在多个选项中做出选择时，弹出交互式菜单（方向键/数字键选择，`Enter` 确认，`q`/`Esc` 取消；非 TTY 环境退化为编号输入）
+    - 配合 `--non-interactive`（或 `-y`）使用时不弹菜单，改为把决策权交回模型，由其自行选择并静默完成任务
 
 ## 依赖
 
@@ -104,6 +106,8 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
 --append-system-prompt-file <path> 追加文件内容到 system prompt
 --prompt <text>                    启动时预加载首条用户提示词并自动发送
 --prompt-file <path>               从文件读取首条用户提示词
+--non-interactive, -y              非交互模式：由模型自行决策，不询问用户；
+                                   若同时给出 --prompt/--prompt-file，跑完即退出
 --max-iterations <n>               单轮最多工具调用轮数，默认 16
 -h, --help                         显示帮助
 ```

@@ -13,7 +13,9 @@ static const char *SYSTEM_PROMPT =
     "You are lcode, a coding agent running in the user's terminal. "
     "You can read and write files, list directories, and run shell commands to help "
     "with software engineering tasks. Use the provided tools whenever you need to "
-    "inspect or modify the workspace. Think step by step, then act. "
+    "inspect or modify the workspace. When the user needs to choose between several "
+    "options, call the ask_user tool to show an interactive menu instead of listing "
+    "choices in plain text. Think step by step, then act. "
     "When the task is complete, reply to the user with a concise summary.";
 
 static json_object *build_messages(AgentConfig *cfg)
@@ -29,13 +31,24 @@ static json_object *build_messages(AgentConfig *cfg)
         if (asprintf(&merged, "%s\n\n%s", base, cfg->append_system_prompt) < 0)
             merged = NULL;
     }
+    const char *prompt = merged ? merged : base;
+
+    char *with_mode = NULL;
+    if (cfg->non_interactive) {
+        if (asprintf(&with_mode, "%s\n\n%s", prompt,
+                     "Non-interactive mode is enabled: the user has delegated decisions "
+                     "to you. Do not ask the user questions; choose reasonable defaults "
+                     "yourself and complete the task without further input.") < 0)
+            with_mode = NULL;
+    }
 
     json_object *sys = json_object_new_object();
     json_object_object_add(sys, "role", json_object_new_string("system"));
     json_object_object_add(sys, "content",
-                           json_object_new_string(merged ? merged : base));
+                           json_object_new_string(with_mode ? with_mode : prompt));
     json_object_array_add(messages, sys);
     free(merged);
+    free(with_mode);
 
     return messages;
 }
@@ -166,6 +179,8 @@ int agent_run(AgentConfig *cfg)
     char url[1024];
     snprintf(url, sizeof(url), "%s/chat/completions", cfg->base_url);
 
+    tools_set_non_interactive(cfg->non_interactive);
+
     json_object *messages = build_messages(cfg);
 
     printf("lcode - coding agent (%s)\n", cfg->model);
@@ -178,6 +193,11 @@ int agent_run(AgentConfig *cfg)
                                json_object_new_string(cfg->initial_prompt));
         json_object_array_add(messages, um);
         run_turn(cfg, messages, url);
+
+        if (cfg->non_interactive) {
+            json_object_put(messages);
+            return 0;
+        }
     }
 
     while (1) {
