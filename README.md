@@ -6,6 +6,7 @@
 
 - 交互式 REPL，多轮上下文
 - Session 管理：会话以 JSON 持久化到磁盘，可通过命名、恢复、列出与切换
+- Token 用量统计：每次请求后在 stderr 输出 prompt / completion / total 与缓存命中率，`/usage` 查看累计
 - Function Calling 工具循环，模型可连续调用多个工具
 - 内置工具：
   - `read_file` —— 读取文本文件
@@ -155,12 +156,26 @@ REPL 内命令：
 /delete <name>   删除某个会话（不能删除当前会话）
 /session         显示当前会话名
 /save            立即保存当前会话
+/usage           显示当前会话的 token 用量与缓存命中率
 /exit            保存并退出（等价于 Ctrl-D）
 /help            显示命令帮助
 ```
 
 > 恢复会话时会保留历史对话，但第一个 system 消息会被替换为当前启动配置生成的 system
 > prompt（因此 `LCODE.md`、`--append-system-prompt` 等改动会即时生效）。
+
+## 用量与缓存
+
+每次 API 请求后，lcode 会从响应的 `usage` 中统计用量并输出到 **stderr**（暗色行），
+因此不会污染对话内容，也不会被写入会话历史、影响前缀缓存：
+
+```
+[usage] prompt 1200 (cache hit 1100 / miss 100, 91.7%), completion 12, total 1212
+```
+
+`/usage` 显示当前会话的累计值；命中率 = `cache_hit / (cache_hit + cache_miss)`。统计同时
+兼容 DeepSeek 的 `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` 与 OpenAI 风格的
+`prompt_tokens_details.cached_tokens`。累计值仅保存在进程内，重启后从零开始。
 
 进入 REPL 后直接输入需求，例如：
 

@@ -92,6 +92,83 @@ static json_object *merge_loaded_messages(AgentConfig *cfg, json_object *loaded)
     return messages;
 }
 
+typedef struct {
+    long long prompt;
+    long long completion;
+    long long total;
+    long long cache_hit;
+    long long cache_miss;
+    int requests;
+} UsageTotals;
+
+static long long usage_ll(json_object *obj, const char *key)
+{
+    json_object *v;
+    if (!obj || json_object_get_type(obj) != json_type_object)
+        return 0;
+    if (!json_object_object_get_ex(obj, key, &v) || !v)
+        return 0;
+    if (json_object_get_type(v) != json_type_int)
+        return 0;
+    return json_object_get_int64(v);
+}
+
+static void usage_track(UsageTotals *acc, json_object *usage)
+{
+    if (!usage)
+        return;
+
+    long long prompt = usage_ll(usage, "prompt_tokens");
+    long long completion = usage_ll(usage, "completion_tokens");
+    long long total = usage_ll(usage, "total_tokens");
+    long long hit = usage_ll(usage, "prompt_cache_hit_tokens");
+    long long miss = usage_ll(usage, "prompt_cache_miss_tokens");
+
+    if (hit == 0 && miss == 0 && prompt > 0) {
+        json_object *details;
+        if (json_object_object_get_ex(usage, "prompt_tokens_details", &details)) {
+            hit = usage_ll(details, "cached_tokens");
+            if (hit > 0)
+                miss = prompt - hit;
+        }
+    }
+
+    if (prompt == 0 && completion == 0 && total == 0 && hit == 0 && miss == 0)
+        return;
+    if (total == 0)
+        total = prompt + completion;
+
+    acc->prompt += prompt;
+    acc->completion += completion;
+    acc->total += total;
+    acc->cache_hit += hit;
+    acc->cache_miss += miss;
+    acc->requests++;
+
+    double rate = (hit + miss) > 0 ? (100.0 * (double)hit / (double)(hit + miss)) : 0.0;
+    fprintf(stderr,
+            "\033[0;90m[usage] prompt %lld (cache hit %lld / miss %lld, %.1f%%), "
+            "completion %lld, total %lld\033[0m\n",
+            prompt, hit, miss, rate, completion, total);
+}
+
+static void print_usage(const UsageTotals *u)
+{
+    if (u->requests == 0) {
+        printf("no API requests yet\n");
+        return;
+    }
+    double rate = (u->cache_hit + u->cache_miss) > 0
+                      ? (100.0 * (double)u->cache_hit / (double)(u->cache_hit + u->cache_miss))
+                      : 0.0;
+    printf("usage over %d request%s:\n", u->requests, u->requests == 1 ? "" : "s");
+    printf("  prompt tokens : %lld\n", u->prompt);
+    printf("  cache hit     : %lld (%.1f%%)\n", u->cache_hit, rate);
+    printf("  cache miss    : %lld\n", u->cache_miss);
+    printf("  completion    : %lld\n", u->completion);
+    printf("  total         : %lld\n", u->total);
+}
+
 static const char *SESSION_HELP =
     "session commands:\n"
     "  /new [name]      start a new session (saves the current one)\n"
@@ -100,11 +177,13 @@ static const char *SESSION_HELP =
     "  /delete <name>   delete a saved session\n"
     "  /session         show the current session name\n"
     "  /save            save the current session\n"
+    "  /usage           show token usage and cache hit rate\n"
     "  /exit            save and exit (same as Ctrl-D)\n"
     "  /help            show this help\n";
 
 static int handle_command(AgentConfig *cfg, char **session_name,
-                          json_object **messages, const char *line)
+                          json_object **messages, UsageTotals *usage,
+                          const char *line)
 {
     if (line[0] != '/')
         return 0;
@@ -140,6 +219,11 @@ static int handle_command(AgentConfig *cfg, char **session_name,
 
     if (strcmp(cmd, "/list") == 0 || strcmp(cmd, "/sessions") == 0) {
         session_list();
+        return 1;
+    }
+
+    if (strcmp(cmd, "/usage") == 0) {
+        print_usage(usage);
         return 1;
     }
 
@@ -221,7 +305,8 @@ static int handle_command(AgentConfig *cfg, char **session_name,
     return 0;
 }
 
-static int run_turn(AgentConfig *cfg, json_object *messages, const char *url)
+static int run_turn(AgentConfig *cfg, json_object *messages, const char *url,
+                    UsageTotals *usage)
 {
     for (int iter = 0; iter < cfg->max_iterations; iter++) {
         json_object *req = build_request(cfg, messages);
@@ -247,6 +332,10 @@ static int run_turn(AgentConfig *cfg, json_object *messages, const char *url)
             fprintf(stderr, "failed to parse API response\n");
             return -1;
         }
+
+        json_object *usage_obj;
+        if (json_object_object_get_ex(root, "usage", &usage_obj))
+            usage_track(usage, usage_obj);
 
         json_object *choices, *choice, *message;
         if (!json_object_object_get_ex(root, "choices", &choices) ||
@@ -341,6 +430,8 @@ int agent_run(AgentConfig *cfg)
         return 1;
     }
 
+    UsageTotals usage = {0};
+
     int resumed = 0;
     json_object *messages = NULL;
     json_object *loaded = session_load(session_name);
@@ -362,7 +453,7 @@ int agent_run(AgentConfig *cfg)
         json_object_object_add(um, "content",
                                json_object_new_string(cfg->initial_prompt));
         json_object_array_add(messages, um);
-        run_turn(cfg, messages, url);
+        run_turn(cfg, messages, url, &usage);
         session_save(session_name, cfg->model, messages);
 
         if (cfg->non_interactive) {
@@ -384,7 +475,7 @@ int agent_run(AgentConfig *cfg)
         }
         add_history(line);
 
-        int handled = handle_command(cfg, &session_name, &messages, line);
+        int handled = handle_command(cfg, &session_name, &messages, &usage, line);
         if (handled == 2) {
             free(line);
             break;
@@ -400,7 +491,7 @@ int agent_run(AgentConfig *cfg)
         json_object_array_add(messages, um);
         free(line);
 
-        run_turn(cfg, messages, url);
+        run_turn(cfg, messages, url, &usage);
         session_save(session_name, cfg->model, messages);
     }
 
