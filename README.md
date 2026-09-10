@@ -154,6 +154,7 @@ REPL 内命令：
 /delete <name>   删除某个会话（不能删除当前会话）
 /session         显示当前会话名
 /save            立即保存当前会话
+/exit            保存并退出（等价于 Ctrl-D）
 /help            显示命令帮助
 ```
 

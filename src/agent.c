@@ -100,6 +100,7 @@ static const char *SESSION_HELP =
     "  /delete <name>   delete a saved session\n"
     "  /session         show the current session name\n"
     "  /save            save the current session\n"
+    "  /exit            save and exit (same as Ctrl-D)\n"
     "  /help            show this help\n";
 
 static int handle_command(AgentConfig *cfg, char **session_name,
@@ -213,6 +214,9 @@ static int handle_command(AgentConfig *cfg, char **session_name,
             printf("session '%s' not found\n", name);
         return 1;
     }
+
+    if (strcmp(cmd, "/exit") == 0)
+        return 2;
 
     return 0;
 }
@@ -380,7 +384,12 @@ int agent_run(AgentConfig *cfg)
         }
         add_history(line);
 
-        if (handle_command(cfg, &session_name, &messages, line)) {
+        int handled = handle_command(cfg, &session_name, &messages, line);
+        if (handled == 2) {
+            free(line);
+            break;
+        }
+        if (handled == 1) {
             free(line);
             continue;
         }
