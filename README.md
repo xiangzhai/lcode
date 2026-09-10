@@ -5,6 +5,7 @@
 ## 功能
 
 - 交互式 REPL，多轮上下文
+- Session 管理：会话以 JSON 持久化到磁盘，可通过命名、恢复、列出与切换
 - Function Calling 工具循环，模型可连续调用多个工具
 - 内置工具：
   - `read_file` —— 读取文本文件
@@ -88,6 +89,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
 | `DEEPSEEK_API_KEY` | API 密钥（必填） | 无 |
 | `DEEPSEEK_BASE_URL` | API 基础地址 | `https://api.deepseek.com` |
 | `DEEPSEEK_MODEL` | 模型名称 | `deepseek-v4-flash` |
+| `LCODE_HOME` | session 存储根目录（会话位于其下 `sessions/`） | `$XDG_DATA_HOME/lcode`，否则 `~/.local/share/lcode` |
 
 ## 运行
 
@@ -106,6 +108,9 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
 --append-system-prompt-file <path> 追加文件内容到 system prompt
 --prompt <text>                    启动时预加载首条用户提示词并自动发送
 --prompt-file <path>               从文件读取首条用户提示词
+--session <name>                   打开或创建命名 session
+--resume                           恢复最近更新的 session
+--list-sessions                    列出已保存的 session 并退出
 --non-interactive, -y              非交互模式：由模型自行决策，不询问用户；
                                    若同时给出 --prompt/--prompt-file，跑完即退出
 --max-iterations <n>               单轮最多工具调用轮数，默认 16
@@ -119,6 +124,9 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
 ./build/lcode --append-system-prompt "始终使用中文回答"
 ./build/lcode --prompt "先列出当前目录，然后总结项目结构"
 ./build/lcode --system-prompt-file prompts/reviewer.md --prompt-file prompts/task.md
+./build/lcode --session refactor-auth        # 打开/新建命名会话
+./build/lcode --resume                       # 恢复最近一次会话
+./build/lcode --list-sessions                # 列出全部会话
 ```
 
 > 预加载的首条提示词会在进入 REPL 前自动发送，之后仍可继续交互输入；`--prompt` 与
@@ -128,6 +136,29 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
 `--append-system-prompt-file .lcode.md`）。若显式指定了 `--append-system-prompt` 或
 `--append-system-prompt-file`，则以显式参数为准，不再加载 `.lcode.md`。可用它固化项目的
 开发与调试约定，例如仓库自带的 `.lcode.md`。
+
+## Session 管理
+
+每个会话把完整的消息历史（含 system / user / assistant / tool）保存为一个 JSON 文件，
+默认位于 `~/.local/share/lcode/sessions/<name>.json`（可用 `LCODE_HOME` 覆盖根目录）。
+每轮对话结束后自动保存；启动时若无 `--session`，会新建一个带时间戳的会话。
+
+CLI：`--session <name>` 打开或创建、`--resume` 恢复最近一个、`--list-sessions` 列出并退出。
+
+REPL 内命令：
+
+```
+/new [name]      新建会话（自动保存当前会话）
+/list            列出已保存的会话
+/switch <name>   保存当前会话并切换到另一个
+/delete <name>   删除某个会话（不能删除当前会话）
+/session         显示当前会话名
+/save            立即保存当前会话
+/help            显示命令帮助
+```
+
+> 恢复会话时会保留历史对话，但第一个 system 消息会被替换为当前启动配置生成的 system
+> prompt（因此 `.lcode.md`、`--append-system-prompt` 等改动会即时生效）。
 
 进入 REPL 后直接输入需求，例如：
 

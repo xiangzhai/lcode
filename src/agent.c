@@ -1,5 +1,6 @@
 #include "agent.h"
 #include "http.h"
+#include "session.h"
 #include "tools.h"
 
 #include <json-c/json.h>
@@ -74,6 +75,146 @@ static const char *json_string_at(json_object *obj, const char *key)
     if (json_object_get_type(v) != json_type_string)
         return NULL;
     return json_object_get_string(v);
+}
+
+static json_object *merge_loaded_messages(AgentConfig *cfg, json_object *loaded)
+{
+    json_object *messages = build_messages(cfg);
+    int n = (int)json_object_array_length(loaded);
+    int start = 0;
+    if (n > 0) {
+        const char *role = json_string_at(json_object_array_get_idx(loaded, 0), "role");
+        if (role && strcmp(role, "system") == 0)
+            start = 1;
+    }
+    for (int i = start; i < n; i++)
+        json_object_array_add(messages, json_object_get(json_object_array_get_idx(loaded, i)));
+    return messages;
+}
+
+static const char *SESSION_HELP =
+    "session commands:\n"
+    "  /new [name]      start a new session (saves the current one)\n"
+    "  /list            list saved sessions\n"
+    "  /switch <name>   save current and open another session\n"
+    "  /delete <name>   delete a saved session\n"
+    "  /session         show the current session name\n"
+    "  /save            save the current session\n"
+    "  /help            show this help\n";
+
+static int handle_command(AgentConfig *cfg, char **session_name,
+                          json_object **messages, const char *line)
+{
+    if (line[0] != '/')
+        return 0;
+
+    char cmd[64];
+    size_t clen = strcspn(line, " \t");
+    if (clen == 0 || clen >= sizeof(cmd))
+        return 0;
+    memcpy(cmd, line, clen);
+    cmd[clen] = '\0';
+
+    const char *arg = line + clen;
+    while (*arg == ' ' || *arg == '\t')
+        arg++;
+
+    char name[128] = "";
+    if (*arg) {
+        snprintf(name, sizeof(name), "%s", arg);
+        size_t nlen = strlen(name);
+        while (nlen > 0 && (name[nlen - 1] == ' ' || name[nlen - 1] == '\t'))
+            name[--nlen] = '\0';
+    }
+
+    if (strcmp(cmd, "/help") == 0) {
+        fputs(SESSION_HELP, stdout);
+        return 1;
+    }
+
+    if (strcmp(cmd, "/session") == 0) {
+        printf("current session: %s\n", *session_name);
+        return 1;
+    }
+
+    if (strcmp(cmd, "/list") == 0 || strcmp(cmd, "/sessions") == 0) {
+        session_list();
+        return 1;
+    }
+
+    if (strcmp(cmd, "/save") == 0) {
+        if (session_save(*session_name, cfg->model, *messages) == 0)
+            printf("saved session '%s'\n", *session_name);
+        else
+            printf("failed to save session '%s'\n", *session_name);
+        return 1;
+    }
+
+    if (strcmp(cmd, "/new") == 0) {
+        char *newname;
+        if (*name) {
+            if (!session_validate_name(name)) {
+                printf("invalid session name '%s'\n", name);
+                return 1;
+            }
+            newname = strdup(name);
+        } else {
+            newname = session_generate_name();
+        }
+        if (!newname) {
+            printf("out of memory\n");
+            return 1;
+        }
+        session_save(*session_name, cfg->model, *messages);
+        free(*session_name);
+        *session_name = newname;
+        json_object_put(*messages);
+        *messages = build_messages(cfg);
+        printf("started new session '%s'\n", *session_name);
+        return 1;
+    }
+
+    if (strcmp(cmd, "/switch") == 0 || strcmp(cmd, "/resume") == 0) {
+        if (!*name) {
+            printf("usage: %s <name>\n", cmd);
+            return 1;
+        }
+        if (!session_validate_name(name)) {
+            printf("invalid session name '%s'\n", name);
+            return 1;
+        }
+        json_object *loaded = session_load(name);
+        if (!loaded) {
+            printf("session '%s' not found\n", name);
+            return 1;
+        }
+        session_save(*session_name, cfg->model, *messages);
+        free(*session_name);
+        *session_name = strdup(name);
+        json_object_put(*messages);
+        *messages = merge_loaded_messages(cfg, loaded);
+        json_object_put(loaded);
+        printf("switched to session '%s'\n", *session_name);
+        return 1;
+    }
+
+    if (strcmp(cmd, "/delete") == 0) {
+        if (!*name) {
+            printf("usage: /delete <name>\n");
+            return 1;
+        }
+        if (strcmp(name, *session_name) == 0) {
+            printf("cannot delete the current session\n");
+            return 1;
+        }
+        if (session_delete(name) == 0)
+            printf("deleted session '%s'\n", name);
+        else
+            printf("session '%s' not found\n", name);
+        return 1;
+    }
+
+    return 0;
 }
 
 static int run_turn(AgentConfig *cfg, json_object *messages, const char *url)
@@ -181,10 +322,35 @@ int agent_run(AgentConfig *cfg)
 
     tools_set_non_interactive(cfg->non_interactive);
 
-    json_object *messages = build_messages(cfg);
+    char *session_name = NULL;
+    if (cfg->session && *cfg->session) {
+        if (!session_validate_name(cfg->session)) {
+            fprintf(stderr, "error: invalid session name '%s'\n", cfg->session);
+            return 1;
+        }
+        session_name = strdup(cfg->session);
+    } else {
+        session_name = session_generate_name();
+    }
+    if (!session_name) {
+        fprintf(stderr, "error: out of memory\n");
+        return 1;
+    }
+
+    int resumed = 0;
+    json_object *messages = NULL;
+    json_object *loaded = session_load(session_name);
+    if (loaded) {
+        messages = merge_loaded_messages(cfg, loaded);
+        json_object_put(loaded);
+        resumed = 1;
+    } else {
+        messages = build_messages(cfg);
+    }
 
     printf("lcode - coding agent (%s)\n", cfg->model);
-    printf("Type your request, Ctrl-D to exit.\n");
+    printf("session: %s%s\n", session_name, resumed ? " (resumed)" : "");
+    printf("Type your request, Ctrl-D to exit. /help for session commands.\n");
 
     if (cfg->initial_prompt && *cfg->initial_prompt) {
         json_object *um = json_object_new_object();
@@ -193,9 +359,11 @@ int agent_run(AgentConfig *cfg)
                                json_object_new_string(cfg->initial_prompt));
         json_object_array_add(messages, um);
         run_turn(cfg, messages, url);
+        session_save(session_name, cfg->model, messages);
 
         if (cfg->non_interactive) {
             json_object_put(messages);
+            free(session_name);
             return 0;
         }
     }
@@ -212,6 +380,11 @@ int agent_run(AgentConfig *cfg)
         }
         add_history(line);
 
+        if (handle_command(cfg, &session_name, &messages, line)) {
+            free(line);
+            continue;
+        }
+
         json_object *um = json_object_new_object();
         json_object_object_add(um, "role", json_object_new_string("user"));
         json_object_object_add(um, "content", json_object_new_string(line));
@@ -219,8 +392,11 @@ int agent_run(AgentConfig *cfg)
         free(line);
 
         run_turn(cfg, messages, url);
+        session_save(session_name, cfg->model, messages);
     }
 
+    session_save(session_name, cfg->model, messages);
     json_object_put(messages);
+    free(session_name);
     return 0;
 }

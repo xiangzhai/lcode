@@ -21,6 +21,7 @@ add_executable(lcode
   src/agent.c
   src/http.c
   src/tools.c
+  src/session.c
 )
 
 target_include_directories(lcode PRIVATE include)

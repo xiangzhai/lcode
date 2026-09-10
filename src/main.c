@@ -1,5 +1,6 @@
 #include "agent.h"
 #include "http.h"
+#include "session.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -71,34 +72,34 @@ static void usage(const char *prog)
             "  --append-system-prompt-file <path> append file contents to the system prompt\n"
             "  --prompt <text>             preload an initial user prompt\n"
             "  --prompt-file <path>        read the initial user prompt from a file\n"
+            "  --session <name>            open or create a named session\n"
+            "  --resume                    resume the most recently updated session\n"
+            "  --list-sessions             list saved sessions and exit\n"
             "  --non-interactive, -y       let the model decide; never ask, exit after --prompt\n"
             "  --max-iterations <n>        max tool-call rounds per turn (default: 16)\n"
             "  -h, --help                  show this help\n"
-            "env: DEEPSEEK_API_KEY (required), DEEPSEEK_BASE_URL, DEEPSEEK_MODEL\n"
+            "env: DEEPSEEK_API_KEY (required), DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, LCODE_HOME\n"
             "note: .lcode.md in the current directory is auto-appended to the system prompt\n",
             prog);
 }
 
 int main(int argc, char **argv)
 {
-    const char *api_key = getenv("DEEPSEEK_API_KEY");
-    if (!api_key || !*api_key) {
-        fprintf(stderr, "error: DEEPSEEK_API_KEY is not set\n");
-        return 1;
-    }
-
     AgentConfig cfg;
-    cfg.api_key = api_key;
+    cfg.api_key = getenv("DEEPSEEK_API_KEY");
     cfg.base_url = env_or("DEEPSEEK_BASE_URL", "https://api.deepseek.com");
     cfg.model = env_or("DEEPSEEK_MODEL", "deepseek-v4-flash");
     cfg.system_prompt = NULL;
     cfg.append_system_prompt = NULL;
     cfg.initial_prompt = NULL;
+    cfg.session = NULL;
     cfg.non_interactive = 0;
     cfg.max_iterations = 16;
 
-    char *owned[8];
+    char *owned[10];
     int owned_n = 0;
+    int list_sessions = 0;
+    int resume = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--model") == 0 && i + 1 < argc) {
@@ -131,6 +132,12 @@ int main(int argc, char **argv)
                 cfg.append_system_prompt = content;
             else
                 cfg.initial_prompt = content;
+        } else if (strcmp(argv[i], "--session") == 0 && i + 1 < argc) {
+            cfg.session = argv[++i];
+        } else if (strcmp(argv[i], "--resume") == 0) {
+            resume = 1;
+        } else if (strcmp(argv[i], "--list-sessions") == 0) {
+            list_sessions = 1;
         } else if (strcmp(argv[i], "--non-interactive") == 0 || strcmp(argv[i], "-y") == 0) {
             cfg.non_interactive = 1;
         } else if (strcmp(argv[i], "--max-iterations") == 0 && i + 1 < argc) {
@@ -145,6 +152,39 @@ int main(int argc, char **argv)
             usage(argv[0]);
             return 1;
         }
+    }
+
+    if (list_sessions) {
+        session_list();
+        for (int k = 0; k < owned_n; k++)
+            free(owned[k]);
+        return 0;
+    }
+
+    if (cfg.session && !session_validate_name(cfg.session)) {
+        fprintf(stderr, "error: invalid session name '%s'\n", cfg.session);
+        for (int k = 0; k < owned_n; k++)
+            free(owned[k]);
+        return 1;
+    }
+
+    if (resume && !cfg.session) {
+        char *latest = session_latest();
+        if (!latest) {
+            fprintf(stderr, "error: no sessions to resume\n");
+            for (int k = 0; k < owned_n; k++)
+                free(owned[k]);
+            return 1;
+        }
+        owned[owned_n++] = latest;
+        cfg.session = latest;
+    }
+
+    if (!cfg.api_key || !*cfg.api_key) {
+        fprintf(stderr, "error: DEEPSEEK_API_KEY is not set\n");
+        for (int k = 0; k < owned_n; k++)
+            free(owned[k]);
+        return 1;
     }
 
     if (!cfg.append_system_prompt &&
