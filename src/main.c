@@ -8,7 +8,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#define APPEND_PROMPT_FILE ".lcode.md"
+#define APPEND_PROMPT_FILE "LCODE.md"
 #define DEFAULT_MAX_ITERATIONS 64
 
 static const char *env_or(const char *name, const char *fallback)
@@ -80,7 +80,7 @@ static void usage(const char *prog)
             "  --max-iterations <n>        max tool-call rounds per turn (default: 64)\n"
             "  -h, --help                  show this help\n"
             "env: DEEPSEEK_API_KEY (required), DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, LCODE_HOME\n"
-            "note: .lcode.md in the current directory is auto-appended to the system prompt\n",
+            "note: LCODE.md in the current directory is auto-appended to the system prompt\n",
             prog);
 }
 

@@ -4,7 +4,7 @@
 
 ## 项目结构
 
-- `src/main.c` —— 入口：环境变量与命令行参数解析、`.lcode.md` 自动加载
+- `src/main.c` —— 入口：环境变量与命令行参数解析、`LCODE.md` 自动加载
 - `src/agent.c` —— 系统提示词、消息构建、REPL 与工具调用主循环
 - `src/http.c` —— 基于 libcurl 的 HTTP POST，封装 `HttpResponse`
 - `src/tools.c` —— 工具 schema 与实现（`read_file` / `write_file` / `list_dir` / `run_shell`）

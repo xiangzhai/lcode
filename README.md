@@ -132,10 +132,10 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
 > 预加载的首条提示词会在进入 REPL 前自动发送，之后仍可继续交互输入；`--prompt` 与
 > `--prompt-file` 同时给出时，以文件内容为准（按参数出现顺序，后出现者覆盖前者）。
 
-启动时会自动读取**当前目录**下的 `.lcode.md`，将其内容追加到 system prompt（等价于
-`--append-system-prompt-file .lcode.md`）。若显式指定了 `--append-system-prompt` 或
-`--append-system-prompt-file`，则以显式参数为准，不再加载 `.lcode.md`。可用它固化项目的
-开发与调试约定，例如仓库自带的 `.lcode.md`。
+启动时会自动读取**当前目录**下的 `LCODE.md`，将其内容追加到 system prompt（等价于
+`--append-system-prompt-file LCODE.md`）。若显式指定了 `--append-system-prompt` 或
+`--append-system-prompt-file`，则以显式参数为准，不再加载 `LCODE.md`。可用它固化项目的
+开发与调试约定，例如仓库自带的 `LCODE.md`。
 
 ## Session 管理
 
@@ -159,7 +159,7 @@ REPL 内命令：
 ```
 
 > 恢复会话时会保留历史对话，但第一个 system 消息会被替换为当前启动配置生成的 system
-> prompt（因此 `.lcode.md`、`--append-system-prompt` 等改动会即时生效）。
+> prompt（因此 `LCODE.md`、`--append-system-prompt` 等改动会即时生效）。
 
 进入 REPL 后直接输入需求，例如：
 
