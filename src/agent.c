@@ -1,5 +1,6 @@
 #include "agent.h"
 #include "http.h"
+#include "interrupt.h"
 #include "session.h"
 #include "tools.h"
 
@@ -169,6 +170,12 @@ static void print_usage(const UsageTotals *u)
     printf("  total         : %lld\n", u->total);
 }
 
+enum {
+    TURN_OK = 0,
+    TURN_ERROR = -1,
+    TURN_INTERRUPTED = 1,
+};
+
 static const char *SESSION_HELP =
     "session commands:\n"
     "  /new [name]      start a new session (saves the current one)\n"
@@ -305,32 +312,51 @@ static int handle_command(AgentConfig *cfg, char **session_name,
     return 0;
 }
 
+static void add_interrupted_tool(json_object *messages, json_object *tc)
+{
+    const char *id = json_string_at(tc, "id");
+    json_object *tm = json_object_new_object();
+    json_object_object_add(tm, "role", json_object_new_string("tool"));
+    json_object_object_add(tm, "tool_call_id", json_object_new_string(id ? id : ""));
+    json_object_object_add(tm, "content",
+                           json_object_new_string("error: interrupted by user"));
+    json_object_array_add(messages, tm);
+}
+
 static int run_turn(AgentConfig *cfg, json_object *messages, const char *url,
                     UsageTotals *usage)
 {
+    interrupt_clear();
     for (int iter = 0; iter < cfg->max_iterations; iter++) {
+        if (interrupt_pending())
+            return TURN_INTERRUPTED;
+
         json_object *req = build_request(cfg, messages);
         const char *body = json_object_to_json_string_ext(req, JSON_C_TO_STRING_PLAIN);
 
         HttpResponse res = http_post_json(url, cfg->api_key, body);
         json_object_put(req);
 
+        if (res.interrupted) {
+            http_response_free(&res);
+            return TURN_INTERRUPTED;
+        }
         if (res.error) {
             fprintf(stderr, "request failed: %s\n", res.error);
             http_response_free(&res);
-            return -1;
+            return TURN_ERROR;
         }
         if (res.status < 200 || res.status >= 300) {
             fprintf(stderr, "API error (HTTP %ld): %s\n", res.status, res.body ? res.body : "");
             http_response_free(&res);
-            return -1;
+            return TURN_ERROR;
         }
 
         json_object *root = json_tokener_parse(res.body);
         http_response_free(&res);
         if (!root) {
             fprintf(stderr, "failed to parse API response\n");
-            return -1;
+            return TURN_ERROR;
         }
 
         json_object *usage_obj;
@@ -343,13 +369,13 @@ static int run_turn(AgentConfig *cfg, json_object *messages, const char *url,
             json_object_array_length(choices) == 0) {
             fprintf(stderr, "unexpected response: %s\n", json_object_to_json_string(root));
             json_object_put(root);
-            return -1;
+            return TURN_ERROR;
         }
         choice = json_object_array_get_idx(choices, 0);
         if (!json_object_object_get_ex(choice, "message", &message)) {
             fprintf(stderr, "response has no message\n");
             json_object_put(root);
-            return -1;
+            return TURN_ERROR;
         }
 
         const char *text = json_string_at(message, "content");
@@ -363,7 +389,7 @@ static int run_turn(AgentConfig *cfg, json_object *messages, const char *url,
             json_object_array_length(tool_calls) == 0) {
             json_object_array_add(messages, json_object_get(message));
             json_object_put(root);
-            return 0;
+            return TURN_OK;
         }
 
         json_object_array_add(messages, json_object_get(message));
@@ -371,6 +397,14 @@ static int run_turn(AgentConfig *cfg, json_object *messages, const char *url,
         int n = json_object_array_length(tool_calls);
         for (int t = 0; t < n; t++) {
             json_object *tc = json_object_array_get_idx(tool_calls, t);
+
+            if (interrupt_pending()) {
+                for (; t < n; t++)
+                    add_interrupted_tool(messages, json_object_array_get_idx(tool_calls, t));
+                json_object_put(root);
+                return TURN_INTERRUPTED;
+            }
+
             const char *id = json_string_at(tc, "id");
             const char *name = NULL;
             const char *args_str = "{}";
@@ -405,7 +439,38 @@ static int run_turn(AgentConfig *cfg, json_object *messages, const char *url,
     }
 
     fprintf(stderr, "reached max tool iterations (%d)\n", cfg->max_iterations);
-    return 0;
+    return TURN_OK;
+}
+
+static int run_turn_with_redirect(AgentConfig *cfg, json_object *messages,
+                                  const char *url, UsageTotals *usage)
+{
+    while (1) {
+        int rc = run_turn(cfg, messages, url, usage);
+        if (rc != TURN_INTERRUPTED)
+            return rc;
+
+        interrupt_clear();
+        fprintf(stderr,
+                "\n\033[1;33m[interrupted]\033[0m the model was stopped. "
+                "给出一条新的指示来改变思路（直接回车跳过）。\n");
+        if (cfg->non_interactive)
+            return rc;
+
+        char *line = readline("\033[1;33mredirect> \033[0m");
+        if (!line || !*line) {
+            free(line);
+            return rc;
+        }
+        add_history(line);
+
+        json_object *um = json_object_new_object();
+        json_object_object_add(um, "role", json_object_new_string("user"));
+        json_object_object_add(um, "content", json_object_new_string(line));
+        json_object_array_add(messages, um);
+        free(line);
+        interrupt_clear();
+    }
 }
 
 int agent_run(AgentConfig *cfg)
@@ -445,7 +510,8 @@ int agent_run(AgentConfig *cfg)
 
     printf("lcode - coding agent (%s)\n", cfg->model);
     printf("session: %s%s\n", session_name, resumed ? " (resumed)" : "");
-    printf("Type your request, Ctrl-D to exit. /help for session commands.\n");
+    printf("Type your request, Ctrl-D to exit. Press ESC to interrupt the model. "
+           "/help for session commands.\n");
 
     if (cfg->initial_prompt && *cfg->initial_prompt) {
         json_object *um = json_object_new_object();
@@ -453,7 +519,7 @@ int agent_run(AgentConfig *cfg)
         json_object_object_add(um, "content",
                                json_object_new_string(cfg->initial_prompt));
         json_object_array_add(messages, um);
-        run_turn(cfg, messages, url, &usage);
+        run_turn_with_redirect(cfg, messages, url, &usage);
         session_save(session_name, cfg->model, messages);
 
         if (cfg->non_interactive) {
@@ -491,7 +557,7 @@ int agent_run(AgentConfig *cfg)
         json_object_array_add(messages, um);
         free(line);
 
-        run_turn(cfg, messages, url, &usage);
+        run_turn_with_redirect(cfg, messages, url, &usage);
         session_save(session_name, cfg->model, messages);
     }
 

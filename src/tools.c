@@ -1,7 +1,10 @@
 #include "tools.h"
+#include "interrupt.h"
 
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -94,6 +97,24 @@ static char *sb_steal(StrBuf *sb)
     sb->len = 0;
     sb->cap = 0;
     return b;
+}
+
+static int sb_addn(StrBuf *sb, const char *data, size_t n)
+{
+    if (sb->len + n + 1 > sb->cap) {
+        size_t ncap = sb->cap ? sb->cap : 1;
+        while (sb->len + n + 1 > ncap)
+            ncap *= 2;
+        char *tmp = realloc(sb->buf, ncap);
+        if (!tmp)
+            return -1;
+        sb->buf = tmp;
+        sb->cap = ncap;
+    }
+    memcpy(sb->buf + sb->len, data, n);
+    sb->len += n;
+    sb->buf[sb->len] = '\0';
+    return 0;
 }
 
 static char *read_stream(FILE *f)
@@ -229,32 +250,111 @@ static char *tool_run_shell(json_object *args)
     if (!command)
         return xstrdup("error: missing required argument 'command'");
 
-    FILE *p = popen(command, "r");
-    if (!p) {
+    int fds[2];
+    if (pipe(fds) != 0) {
+        char *msg = NULL;
+        if (asprintf(&msg, "error: failed to create pipe: %s", strerror(errno)) < 0)
+            return xstrdup("error: failed to create pipe");
+        return msg;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(fds[0]);
+        close(fds[1]);
         char *msg = NULL;
         if (asprintf(&msg, "error: failed to run command: %s", strerror(errno)) < 0)
             return xstrdup("error: failed to run command");
         return msg;
     }
 
-    char *out = read_stream(p);
-    int status = pclose(p);
+    if (pid == 0) {
+        close(fds[0]);
+        dup2(fds[1], STDOUT_FILENO);
+        dup2(fds[1], STDERR_FILENO);
+        close(fds[1]);
+        execl("/bin/sh", "sh", "-c", command, (char *)NULL);
+        _exit(127);
+    }
+
+    close(fds[1]);
 
     StrBuf sb;
-    if (sb_init(&sb, 256) != 0) {
-        free(out);
+    if (sb_init(&sb, 1024) != 0) {
+        kill(pid, SIGKILL);
+        close(fds[0]);
+        waitpid(pid, NULL, 0);
         return xstrdup("error: out of memory");
     }
 
-    if (WIFEXITED(status))
-        sb_addf(&sb, "exit_status: %d\n", WEXITSTATUS(status));
-    else
-        sb_addf(&sb, "exit_status: terminated by signal %d\n", WTERMSIG(status));
+    interrupt_watch_begin();
 
-    if (out)
-        sb_add(&sb, out);
-    free(out);
-    return sb_steal(&sb);
+    int interrupted = 0;
+    char buf[4096];
+    for (;;) {
+        if (interrupt_poll()) {
+            interrupted = 1;
+            break;
+        }
+
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(fds[0], &rfds);
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = 100000;
+
+        int s = select(fds[0] + 1, &rfds, NULL, NULL, &tv);
+        if (s < 0) {
+            if (errno == EINTR)
+                continue;
+            break;
+        }
+        if (s == 0)
+            continue;
+
+        ssize_t n = read(fds[0], buf, sizeof(buf));
+        if (n > 0) {
+            if (sb.len < MAX_TOOL_OUTPUT) {
+                size_t room = MAX_TOOL_OUTPUT - sb.len;
+                sb_addn(&sb, buf, (size_t)n > room ? room : (size_t)n);
+            }
+        } else if (n == 0) {
+            break;
+        } else if (errno != EINTR && errno != EAGAIN) {
+            break;
+        }
+    }
+
+    if (interrupted)
+        kill(pid, SIGKILL);
+
+    close(fds[0]);
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    interrupt_watch_end();
+
+    StrBuf result;
+    if (sb_init(&result, 256) != 0) {
+        free(sb.buf);
+        return xstrdup("error: out of memory");
+    }
+
+    if (interrupted)
+        sb_add(&result, "[interrupted by user]\n");
+
+    if (WIFEXITED(status))
+        sb_addf(&result, "exit_status: %d\n", WEXITSTATUS(status));
+    else if (WIFSIGNALED(status))
+        sb_addf(&result, "exit_status: terminated by signal %d\n", WTERMSIG(status));
+    else
+        sb_add(&result, "exit_status: unknown\n");
+
+    if (sb.buf)
+        sb_add(&result, sb.buf);
+    free(sb.buf);
+    return sb_steal(&result);
 }
 
 static int g_non_interactive = 0;

@@ -1,4 +1,5 @@
 #include "http.h"
+#include "interrupt.h"
 #include "version.h"
 
 #include <curl/curl.h>
@@ -25,6 +26,17 @@ static size_t write_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
     buf->size += total;
     buf->data[buf->size] = '\0';
     return total;
+}
+
+static int progress_cb(void *clientp, curl_off_t dltotal, curl_off_t dlnow,
+                       curl_off_t ultotal, curl_off_t ulnow)
+{
+    (void)clientp;
+    (void)dltotal;
+    (void)dlnow;
+    (void)ultotal;
+    (void)ulnow;
+    return interrupt_poll() ? 1 : 0;
 }
 
 void http_global_init(void)
@@ -75,9 +87,17 @@ HttpResponse http_post_json(const char *url, const char *api_key, const char *js
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "lcode/" LCODE_VERSION);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_cb);
 
+    interrupt_watch_begin();
     CURLcode rc = curl_easy_perform(curl);
-    if (rc != CURLE_OK) {
+    int interrupted = interrupt_poll();
+    interrupt_watch_end();
+
+    if (interrupted) {
+        res.interrupted = 1;
+    } else if (rc != CURLE_OK) {
         res.error = strdup(curl_easy_strerror(rc));
     } else {
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &res.status);

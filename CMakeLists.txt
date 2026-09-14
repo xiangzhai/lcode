@@ -23,6 +23,7 @@ add_executable(lcode
   src/http.c
   src/tools.c
   src/session.c
+  src/interrupt.c
 )
 
 target_include_directories(lcode PRIVATE include)

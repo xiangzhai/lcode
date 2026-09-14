@@ -7,6 +7,7 @@ typedef struct {
     long status;
     char *body;
     char *error;
+    int interrupted;
 } HttpResponse;
 
 void http_global_init(void);
