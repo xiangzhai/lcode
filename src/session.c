@@ -34,6 +34,16 @@ static int mkdir_p(const char *path)
     return 0;
 }
 
+static json_object *load_json_file(const char *path)
+{
+    if (!path)
+        return NULL;
+    struct stat st;
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode))
+        return NULL;
+    return json_object_from_file(path);
+}
+
 const char *session_dir(void)
 {
     static char dir[4096];
@@ -121,7 +131,7 @@ int session_save(const char *name, const char *model, json_object *messages)
         return -1;
 
     long long created = (long long)time(NULL);
-    json_object *existing = json_object_from_file(path);
+    json_object *existing = load_json_file(path);
     if (existing) {
         json_object *v;
         if (json_object_object_get_ex(existing, "created_at", &v))
@@ -165,7 +175,7 @@ json_object *session_load(const char *name)
     if (!path)
         return NULL;
 
-    json_object *root = json_object_from_file(path);
+    json_object *root = load_json_file(path);
     free(path);
     if (!root)
         return NULL;
@@ -218,7 +228,7 @@ int session_list(void)
 
         char *name = strndup(e->d_name, l - 5);
         char *path = session_path(name);
-        json_object *root = path ? json_object_from_file(path) : NULL;
+        json_object *root = load_json_file(path);
         free(path);
 
         long long updated = 0;
@@ -299,7 +309,7 @@ char *session_latest(void)
 
         char *name = strndup(e->d_name, l - 5);
         char *path = session_path(name);
-        json_object *root = path ? json_object_from_file(path) : NULL;
+        json_object *root = load_json_file(path);
         free(path);
 
         long long updated = 0;
