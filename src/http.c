@@ -3,9 +3,12 @@
 #include "version.h"
 
 #include <curl/curl.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
 
 typedef struct {
     char *data;
@@ -37,6 +40,41 @@ static int progress_cb(void *clientp, curl_off_t dltotal, curl_off_t dlnow,
     (void)ultotal;
     (void)ulnow;
     return interrupt_poll() ? 1 : 0;
+}
+
+typedef struct {
+    pthread_mutex_t lock;
+    int stop;
+} Spinner;
+
+static void *spinner_thread(void *arg)
+{
+    Spinner *sp = arg;
+    static const char frames[] = "|/-\\";
+    int i = 0;
+
+    struct timespec t0;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+
+    for (;;) {
+        pthread_mutex_lock(&sp->lock);
+        int stop = sp->stop;
+        pthread_mutex_unlock(&sp->lock);
+        if (stop)
+            break;
+
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        double secs = (double)(now.tv_sec - t0.tv_sec) +
+                      (double)(now.tv_nsec - t0.tv_nsec) / 1e9;
+
+        fprintf(stdout, "\r\033[0;36m%c thinking... %.1fs\033[0m",
+                frames[i++ & 3], secs);
+        fflush(stdout);
+
+        usleep(100000);
+    }
+    return NULL;
 }
 
 void http_global_init(void)
@@ -90,10 +128,27 @@ HttpResponse http_post_json(const char *url, const char *api_key, const char *js
     curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
     curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_cb);
 
+    Spinner spinner;
+    spinner.stop = 0;
+    pthread_mutex_init(&spinner.lock, NULL);
+    pthread_t th;
+    int have_spinner = isatty(STDOUT_FILENO) &&
+                       pthread_create(&th, NULL, spinner_thread, &spinner) == 0;
+
     interrupt_watch_begin();
     CURLcode rc = curl_easy_perform(curl);
     int interrupted = interrupt_poll();
     interrupt_watch_end();
+
+    if (have_spinner) {
+        pthread_mutex_lock(&spinner.lock);
+        spinner.stop = 1;
+        pthread_mutex_unlock(&spinner.lock);
+        pthread_join(th, NULL);
+        fputs("\r\033[2K", stdout);
+        fflush(stdout);
+    }
+    pthread_mutex_destroy(&spinner.lock);
 
     if (interrupted) {
         res.interrupted = 1;
