@@ -52,6 +52,27 @@ static void print_tool_result(const char *result)
            lines - TOOL_OUTPUT_MAX_LINES);
 }
 
+static void print_tool_call(const char *name, const char *args_str, json_object *args)
+{
+    if (name && strcmp(name, "write_file") == 0 && args &&
+        json_object_get_type(args) == json_type_object) {
+        json_object *v;
+        const char *path = NULL;
+        size_t bytes = 0;
+        if (json_object_object_get_ex(args, "path", &v) &&
+            json_object_get_type(v) == json_type_string)
+            path = json_object_get_string(v);
+        if (json_object_object_get_ex(args, "content", &v) &&
+            json_object_get_type(v) == json_type_string)
+            bytes = strlen(json_object_get_string(v));
+        printf("\n\033[1;33m[tool] write_file %s (%zu bytes)\033[0m\n",
+               path ? path : "(unknown)", bytes);
+        return;
+    }
+
+    printf("\n\033[1;33m[tool] %s %s\033[0m\n", name ? name : "(unknown)", args_str);
+}
+
 static json_object *build_messages(AgentConfig *cfg)
 {
     json_object *messages = json_object_new_array();
@@ -449,9 +470,8 @@ static int run_turn(AgentConfig *cfg, json_object *messages, const char *url,
                     args_str = a;
             }
 
-            printf("\n\033[1;33m[tool] %s %s\033[0m\n", name ? name : "(unknown)", args_str);
-
             json_object *args = json_tokener_parse(args_str);
+            print_tool_call(name, args_str, args);
             char *result = tools_execute(name, args);
             if (args)
                 json_object_put(args);
