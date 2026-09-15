@@ -13,6 +13,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 
 #define MAX_TOOL_OUTPUT (256 * 1024)
@@ -289,12 +290,36 @@ static char *tool_run_shell(json_object *args)
 
     interrupt_watch_begin();
 
+    static const char spinner[] = "|/-\\";
+    int show_spinner = isatty(STDOUT_FILENO);
+    int spinner_i = 0;
+
+    struct timespec t_start, t_last;
+    clock_gettime(CLOCK_MONOTONIC, &t_start);
+    t_last = t_start;
+
     int interrupted = 0;
     char buf[4096];
     for (;;) {
         if (interrupt_poll()) {
             interrupted = 1;
             break;
+        }
+
+        if (show_spinner) {
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            double since = (double)(now.tv_sec - t_last.tv_sec) +
+                           (double)(now.tv_nsec - t_last.tv_nsec) / 1e9;
+            if (since >= 0.1) {
+                double secs = (double)(now.tv_sec - t_start.tv_sec) +
+                              (double)(now.tv_nsec - t_start.tv_nsec) / 1e9;
+                t_last = now;
+                fprintf(stdout,
+                        "\r\033[0;90m%c running command... %.1fs\033[0m",
+                        spinner[spinner_i++ & 3], secs);
+                fflush(stdout);
+            }
         }
 
         fd_set rfds;
@@ -334,6 +359,9 @@ static char *tool_run_shell(json_object *args)
     int status = 0;
     waitpid(pid, &status, 0);
     interrupt_watch_end();
+
+    if (show_spinner)
+        fprintf(stdout, "\r\033[2K");
 
     StrBuf result;
     if (sb_init(&result, 256) != 0) {
