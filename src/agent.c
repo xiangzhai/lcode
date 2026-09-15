@@ -20,6 +20,38 @@ static const char *SYSTEM_PROMPT =
     "choices in plain text. Think step by step, then act. "
     "When the task is complete, reply to the user with a concise summary.";
 
+#define TOOL_OUTPUT_MAX_LINES 10
+
+static void print_tool_result(const char *result)
+{
+    if (!result || !*result)
+        return;
+
+    int lines = 0;
+    for (const char *p = result; *p; p++)
+        if (*p == '\n')
+            lines++;
+    if (result[strlen(result) - 1] != '\n')
+        lines++;
+
+    if (lines <= TOOL_OUTPUT_MAX_LINES) {
+        printf("\033[0;90m%s\033[0m\n", result);
+        return;
+    }
+
+    const char *end = result;
+    int seen = 0;
+    while (*end && seen < TOOL_OUTPUT_MAX_LINES) {
+        if (*end == '\n')
+            seen++;
+        end++;
+    }
+
+    printf("\033[0;90m%.*s\033[0m\n", (int)(end - result), result);
+    printf("\033[0;90m... (%d more lines hidden)\033[0m\n",
+           lines - TOOL_OUTPUT_MAX_LINES);
+}
+
 static json_object *build_messages(AgentConfig *cfg)
 {
     json_object *messages = json_object_new_array();
@@ -424,8 +456,7 @@ static int run_turn(AgentConfig *cfg, json_object *messages, const char *url,
             if (args)
                 json_object_put(args);
 
-            if (result && *result)
-                printf("\033[0;90m%s\033[0m\n", result);
+            print_tool_result(result);
 
             json_object *tm = json_object_new_object();
             json_object_object_add(tm, "role", json_object_new_string("tool"));
