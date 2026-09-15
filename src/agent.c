@@ -456,7 +456,8 @@ static int run_turn(AgentConfig *cfg, json_object *messages, const char *url,
             if (args)
                 json_object_put(args);
 
-            print_tool_result(result);
+            if (!tools_output_streamed())
+                print_tool_result(result);
 
             json_object *tm = json_object_new_object();
             json_object_object_add(tm, "role", json_object_new_string("tool"));

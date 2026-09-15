@@ -4,6 +4,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -18,6 +19,7 @@
 
 #define MAX_TOOL_OUTPUT (256 * 1024)
 #define MAX_READ_SIZE (512 * 1024)
+#define DISPLAY_MAX_LINES 10
 
 static const char *arg_str(json_object *args, const char *key)
 {
@@ -245,6 +247,110 @@ static char *tool_list_dir(json_object *args)
     return sb_steal(&sb);
 }
 
+/*
+ * Shared state between the thread that drains the command's output pipe and
+ * the main thread that streams it to the terminal. The buffer, the completion
+ * flag and the wait status are guarded by the mutex.
+ */
+typedef struct {
+    int fd;
+    pid_t pid;
+    StrBuf sb;
+    pthread_mutex_t lock;
+    int status;
+    int exited;
+    int done;
+} ShellJob;
+
+static void *shell_reader_thread(void *arg)
+{
+    ShellJob *job = arg;
+    char buf[4096];
+
+    for (;;) {
+        ssize_t n = read(job->fd, buf, sizeof(buf));
+        if (n > 0) {
+            pthread_mutex_lock(&job->lock);
+            if (job->sb.len < MAX_TOOL_OUTPUT) {
+                size_t room = MAX_TOOL_OUTPUT - job->sb.len;
+                sb_addn(&job->sb, buf, (size_t)n > room ? room : (size_t)n);
+            }
+            pthread_mutex_unlock(&job->lock);
+        } else if (n == 0) {
+            break;
+        } else if (errno != EINTR) {
+            break;
+        }
+    }
+
+    int status = 0;
+    waitpid(job->pid, &status, 0);
+
+    pthread_mutex_lock(&job->lock);
+    job->status = status;
+    job->exited = 1;
+    job->done = 1;
+    pthread_mutex_unlock(&job->lock);
+    return NULL;
+}
+
+typedef struct {
+    size_t shown;
+    int lines;
+    int hidden;
+    int spinner_visible;
+} DisplayState;
+
+/*
+ * Print newly received command output. At most DISPLAY_MAX_LINES lines are
+ * shown live; anything further is counted and summarised once the command
+ * finishes. The full output is still kept in the buffer for the model.
+ */
+static void display_drain(ShellJob *job, DisplayState *ds, int final)
+{
+    pthread_mutex_lock(&job->lock);
+    size_t avail = job->sb.len;
+    size_t pos = ds->shown;
+
+    while (pos < avail) {
+        char *nl = memchr(job->sb.buf + pos, '\n', avail - pos);
+        size_t line_end;
+        if (nl)
+            line_end = (size_t)(nl - job->sb.buf) + 1;
+        else if (final)
+            line_end = avail;
+        else
+            break;
+
+        if (ds->lines < DISPLAY_MAX_LINES) {
+            if (ds->spinner_visible) {
+                fputs("\r\033[2K", stdout);
+                ds->spinner_visible = 0;
+            }
+            fputs("\033[0;90m", stdout);
+            fwrite(job->sb.buf + pos, 1, line_end - pos, stdout);
+            if (job->sb.buf[line_end - 1] != '\n')
+                fputc('\n', stdout);
+            fputs("\033[0m", stdout);
+            fflush(stdout);
+            ds->lines++;
+        } else {
+            ds->hidden++;
+        }
+        pos = line_end;
+    }
+
+    ds->shown = pos;
+    pthread_mutex_unlock(&job->lock);
+}
+
+static int g_last_output_streamed = 0;
+
+int tools_output_streamed(void)
+{
+    return g_last_output_streamed;
+}
+
 static char *tool_run_shell(json_object *args)
 {
     const char *command = arg_str(args, "command");
@@ -280,33 +386,57 @@ static char *tool_run_shell(json_object *args)
 
     close(fds[1]);
 
-    StrBuf sb;
-    if (sb_init(&sb, 1024) != 0) {
+    ShellJob job;
+    memset(&job, 0, sizeof(job));
+    job.fd = fds[0];
+    job.pid = pid;
+    pthread_mutex_init(&job.lock, NULL);
+
+    if (sb_init(&job.sb, 1024) != 0) {
         kill(pid, SIGKILL);
         close(fds[0]);
         waitpid(pid, NULL, 0);
+        pthread_mutex_destroy(&job.lock);
         return xstrdup("error: out of memory");
     }
 
     interrupt_watch_begin();
 
+    int streamed = isatty(STDOUT_FILENO);
     static const char spinner[] = "|/-\\";
-    int show_spinner = isatty(STDOUT_FILENO);
     int spinner_i = 0;
+
+    pthread_t th;
+    int have_thread = (pthread_create(&th, NULL, shell_reader_thread, &job) == 0);
+    if (!have_thread)
+        shell_reader_thread(&job);
+
+    DisplayState ds;
+    memset(&ds, 0, sizeof(ds));
 
     struct timespec t_start, t_last;
     clock_gettime(CLOCK_MONOTONIC, &t_start);
     t_last = t_start;
 
     int interrupted = 0;
-    char buf[4096];
     for (;;) {
+        if (streamed)
+            display_drain(&job, &ds, 0);
+
+        pthread_mutex_lock(&job.lock);
+        int done = job.done;
+        pthread_mutex_unlock(&job.lock);
+
+        if (done)
+            break;
+
         if (interrupt_poll()) {
             interrupted = 1;
+            kill(pid, SIGKILL);
             break;
         }
 
-        if (show_spinner) {
+        if (streamed) {
             struct timespec now;
             clock_gettime(CLOCK_MONOTONIC, &now);
             double since = (double)(now.tv_sec - t_last.tv_sec) +
@@ -319,53 +449,49 @@ static char *tool_run_shell(json_object *args)
                         "\r\033[0;90m%c running command... %.1fs\033[0m",
                         spinner[spinner_i++ & 3], secs);
                 fflush(stdout);
+                ds.spinner_visible = 1;
             }
         }
 
-        fd_set rfds;
-        FD_ZERO(&rfds);
-        FD_SET(fds[0], &rfds);
-        struct timeval tv;
-        tv.tv_sec = 0;
-        tv.tv_usec = 100000;
-
-        int s = select(fds[0] + 1, &rfds, NULL, NULL, &tv);
-        if (s < 0) {
-            if (errno == EINTR)
-                continue;
-            break;
-        }
-        if (s == 0)
-            continue;
-
-        ssize_t n = read(fds[0], buf, sizeof(buf));
-        if (n > 0) {
-            if (sb.len < MAX_TOOL_OUTPUT) {
-                size_t room = MAX_TOOL_OUTPUT - sb.len;
-                sb_addn(&sb, buf, (size_t)n > room ? room : (size_t)n);
-            }
-        } else if (n == 0) {
-            break;
-        } else if (errno != EINTR && errno != EAGAIN) {
-            break;
-        }
+        usleep(50000);
     }
 
-    if (interrupted)
-        kill(pid, SIGKILL);
+    if (have_thread)
+        pthread_join(th, NULL);
+
+    if (streamed)
+        display_drain(&job, &ds, 1);
+    if (ds.spinner_visible)
+        fputs("\r\033[2K", stdout);
 
     close(fds[0]);
-
-    int status = 0;
-    waitpid(pid, &status, 0);
     interrupt_watch_end();
 
-    if (show_spinner)
-        fprintf(stdout, "\r\033[2K");
+    int status = job.exited ? job.status : 0;
+
+    if (streamed) {
+        if (interrupted)
+            fputs("\033[1;33m[interrupted by user]\033[0m\n", stdout);
+        if (job.exited && WIFEXITED(status))
+            fprintf(stdout, "\033[0;90mexit_status: %d\033[0m\n",
+                    WEXITSTATUS(status));
+        else if (job.exited && WIFSIGNALED(status))
+            fprintf(stdout, "\033[0;90mexit_status: terminated by signal %d\033[0m\n",
+                    WTERMSIG(status));
+        else if (job.exited)
+            fputs("\033[0;90mexit_status: unknown\033[0m\n", stdout);
+        if (ds.hidden > 0)
+            fprintf(stdout, "\033[0;90m... (%d more lines hidden)\033[0m\n",
+                    ds.hidden);
+        fflush(stdout);
+    }
+
+    g_last_output_streamed = streamed;
 
     StrBuf result;
     if (sb_init(&result, 256) != 0) {
-        free(sb.buf);
+        free(job.sb.buf);
+        pthread_mutex_destroy(&job.lock);
         return xstrdup("error: out of memory");
     }
 
@@ -379,9 +505,11 @@ static char *tool_run_shell(json_object *args)
     else
         sb_add(&result, "exit_status: unknown\n");
 
-    if (sb.buf)
-        sb_add(&result, sb.buf);
-    free(sb.buf);
+    if (job.sb.buf)
+        sb_add(&result, job.sb.buf);
+
+    free(job.sb.buf);
+    pthread_mutex_destroy(&job.lock);
     return sb_steal(&result);
 }
 
@@ -593,6 +721,8 @@ char *tools_execute(const char *name, json_object *args)
 {
     if (!name)
         return xstrdup("error: missing tool name");
+
+    g_last_output_streamed = 0;
 
     if (strcmp(name, "read_file") == 0)
         return tool_read_file(args);

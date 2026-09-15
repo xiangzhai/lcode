@@ -14,6 +14,7 @@ set(CMAKE_C_FLAGS_DEBUG "-g -O0")
 
 find_package(PkgConfig REQUIRED)
 find_package(Readline REQUIRED)
+find_package(Threads REQUIRED)
 pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl)
 pkg_check_modules(JSONC REQUIRED IMPORTED_TARGET json-c)
 
@@ -32,5 +33,6 @@ target_compile_options(lcode PRIVATE -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(lcode PRIVATE
   PkgConfig::CURL
   PkgConfig::JSONC
+  Threads::Threads
   ${READLINE_LIBRARY}
 )
