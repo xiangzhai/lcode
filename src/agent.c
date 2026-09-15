@@ -2,6 +2,7 @@
 #include "http.h"
 #include "interrupt.h"
 #include "session.h"
+#include "skills.h"
 #include "tools.h"
 
 #include <json-c/json.h>
@@ -88,9 +89,17 @@ static json_object *build_messages(AgentConfig *cfg)
     }
     const char *prompt = merged ? merged : base;
 
+    char *skills_prompt = skills_system_prompt();
+    char *with_skills = NULL;
+    if (skills_prompt) {
+        if (asprintf(&with_skills, "%s\n\n%s", prompt, skills_prompt) < 0)
+            with_skills = NULL;
+    }
+    const char *prompt_with_skills = with_skills ? with_skills : prompt;
+
     char *with_mode = NULL;
     if (cfg->non_interactive) {
-        if (asprintf(&with_mode, "%s\n\n%s", prompt,
+        if (asprintf(&with_mode, "%s\n\n%s", prompt_with_skills,
                      "Non-interactive mode is enabled: the user has delegated decisions "
                      "to you. Do not ask the user questions; choose reasonable defaults "
                      "yourself and complete the task without further input.") < 0)
@@ -100,9 +109,11 @@ static json_object *build_messages(AgentConfig *cfg)
     json_object *sys = json_object_new_object();
     json_object_object_add(sys, "role", json_object_new_string("system"));
     json_object_object_add(sys, "content",
-                           json_object_new_string(with_mode ? with_mode : prompt));
+                           json_object_new_string(with_mode ? with_mode : prompt_with_skills));
     json_object_array_add(messages, sys);
     free(merged);
+    free(skills_prompt);
+    free(with_skills);
     free(with_mode);
 
     return messages;
@@ -238,6 +249,7 @@ static const char *SESSION_HELP =
     "  /session         show the current session name\n"
     "  /save            save the current session\n"
     "  /usage           show token usage and cache hit rate\n"
+    "  /skills          list available skills\n"
     "  /exit            save and exit (same as Ctrl-D)\n"
     "  /help            show this help\n";
 
@@ -284,6 +296,11 @@ static int handle_command(AgentConfig *cfg, char **session_name,
 
     if (strcmp(cmd, "/usage") == 0) {
         print_usage(usage);
+        return 1;
+    }
+
+    if (strcmp(cmd, "/skills") == 0) {
+        skills_list();
         return 1;
     }
 
@@ -531,6 +548,7 @@ int agent_run(AgentConfig *cfg)
     snprintf(url, sizeof(url), "%s/chat/completions", cfg->base_url);
 
     tools_set_non_interactive(cfg->non_interactive);
+    skills_reload();
 
     char *session_name = NULL;
     if (cfg->session && *cfg->session) {

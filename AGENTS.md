@@ -8,6 +8,7 @@
 - `src/agent.c` —— 系统提示词、消息构建、REPL 与工具调用主循环
 - `src/http.c` —— 基于 libcurl 的 HTTP POST，封装 `HttpResponse`
 - `src/tools.c` —— 工具 schema 与实现（`read_file` / `write_file` / `list_dir` / `run_shell`）
+- `src/skills.c` —— skill 发现与加载（`.lcode/skills`、全局 skills 目录、`SKILL.md` frontmatter）
 - `include/*.h` —— 对应模块头文件
 - `test/` —— 测试代码
 - `CMakeLists.txt` —— 构建配置

@@ -1,6 +1,7 @@
 #include "agent.h"
 #include "http.h"
 #include "session.h"
+#include "skills.h"
 #include "version.h"
 
 #include <errno.h>
@@ -77,12 +78,14 @@ static void usage(const char *prog)
             "  --session <name>            open or create a named session\n"
             "  --resume                    resume the most recently updated session\n"
             "  --list-sessions             list saved sessions and exit\n"
+            "  --list-skills               list available skills and exit\n"
             "  --non-interactive, -y       let the model decide; never ask, exit after --prompt\n"
             "  --max-iterations <n>        max tool-call rounds per turn (default: 64)\n"
             "  -h, --help                  show this help\n"
             "  -V, --version               show version and exit\n"
             "env: DEEPSEEK_API_KEY (required), DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, LCODE_HOME\n"
-            "note: AGENTS.md in the current directory is auto-appended to the system prompt\n",
+            "note: AGENTS.md in the current directory is auto-appended to the system prompt\n"
+            "note: skills are discovered in .lcode/skills and $LCODE_HOME/skills\n",
             prog);
 }
 
@@ -102,6 +105,7 @@ int main(int argc, char **argv)
     char *owned[10];
     int owned_n = 0;
     int list_sessions = 0;
+    int list_skills = 0;
     int resume = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -141,6 +145,8 @@ int main(int argc, char **argv)
             resume = 1;
         } else if (strcmp(argv[i], "--list-sessions") == 0) {
             list_sessions = 1;
+        } else if (strcmp(argv[i], "--list-skills") == 0) {
+            list_skills = 1;
         } else if (strcmp(argv[i], "--non-interactive") == 0 || strcmp(argv[i], "-y") == 0) {
             cfg.non_interactive = 1;
         } else if (strcmp(argv[i], "--max-iterations") == 0 && i + 1 < argc) {
@@ -162,6 +168,15 @@ int main(int argc, char **argv)
 
     if (list_sessions) {
         session_list();
+        for (int k = 0; k < owned_n; k++)
+            free(owned[k]);
+        return 0;
+    }
+
+    if (list_skills) {
+        skills_reload();
+        skills_list();
+        skills_free();
         for (int k = 0; k < owned_n; k++)
             free(owned[k]);
         return 0;
@@ -208,6 +223,7 @@ int main(int argc, char **argv)
     http_global_init();
     int rc = agent_run(&cfg);
     http_global_cleanup();
+    skills_free();
 
     for (int k = 0; k < owned_n; k++)
         free(owned[k]);

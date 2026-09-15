@@ -16,6 +16,7 @@
   - `run_shell` —— 执行 shell 命令并返回输出与退出码
   - `ask_user` —— 当需要用户在多个选项中做出选择时，弹出交互式菜单（方向键/数字键选择，`Enter` 确认，`q`/`Esc` 取消；非 TTY 环境退化为编号输入）
     - 配合 `--non-interactive`（或 `-y`）使用时不弹菜单，改为把决策权交回模型，由其自行选择并静默完成任务
+- Skills：从约定目录自动发现技能（`SKILL.md`），在 system prompt 中列出，模型按需通过 `skill` 工具加载完整指令
 
 ## 依赖
 
@@ -113,6 +114,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
 --session <name>                   打开或创建命名 session
 --resume                           恢复最近更新的 session
 --list-sessions                    列出已保存的 session 并退出
+--list-skills                      列出已发现的 skills 并退出
 --non-interactive, -y              非交互模式：由模型自行决策，不询问用户；
                                    若同时给出 --prompt/--prompt-file，跑完即退出
 --max-iterations <n>               单轮最多工具调用轮数，默认 64
@@ -158,12 +160,41 @@ REPL 内命令：
 /session         显示当前会话名
 /save            立即保存当前会话
 /usage           显示当前会话的 token 用量与缓存命中率
+/skills          列出已发现的 skills
 /exit            保存并退出（等价于 Ctrl-D）
 /help            显示命令帮助
 ```
 
 > 恢复会话时会保留历史对话，但第一个 system 消息会被替换为当前启动配置生成的 system
 > prompt（因此 `AGENTS.md`、`--append-system-prompt` 等改动会即时生效）。
+
+## Skills
+
+Skill 用于把特定任务的详细指令按需注入上下文，而不是一开始就占用 system prompt。
+
+发现顺序如下（同名时以先发现者为准）：
+
+1. 当前目录下的 `.lcode/skills/`（项目级）
+2. 全局目录：`$LCODE_HOME/skills`，否则 `$XDG_DATA_HOME/lcode/skills`，否则 `~/.local/share/lcode/skills`
+
+每个 skill 可以是一个包含 `SKILL.md` 的子目录，也可以是技能目录下的一个独立 `*.md` 文件。
+文件开头可选的 YAML frontmatter 用于提供 `name` 与 `description`：
+
+```md
+---
+name: pdf-forms
+description: 填写和校验 PDF 表单
+---
+
+# 步骤
+1. ...
+```
+
+未提供 `name` 时使用目录名（或文件名），未提供 `description` 时取正文第一行。
+
+启动时 lcode 会把所有 skill 的名称与描述追加到 system prompt；当任务匹配时，模型调用
+`skill` 工具（参数 `name`）加载该文件的完整正文。用 `--list-skills` 或 REPL 的 `/skills`
+查看已发现的列表。
 
 ## 用量与缓存
 

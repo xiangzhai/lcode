@@ -24,6 +24,7 @@ add_executable(lcode
   src/http.c
   src/tools.c
   src/session.c
+  src/skills.c
   src/interrupt.c
 )
 

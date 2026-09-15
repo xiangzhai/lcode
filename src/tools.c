@@ -1,5 +1,6 @@
 #include "tools.h"
 #include "interrupt.h"
+#include "skills.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -734,6 +735,8 @@ char *tools_execute(const char *name, json_object *args)
         return tool_list_dir(args);
     if (strcmp(name, "run_shell") == 0)
         return tool_run_shell(args);
+    if (strcmp(name, "skill") == 0)
+        return skills_execute(arg_str(args, "name"));
 
     char *msg = NULL;
     if (asprintf(&msg, "error: unknown tool '%s'", name) < 0)
@@ -831,6 +834,14 @@ json_object *tools_schema(void)
         "Ask the user to choose one option from a list using an interactive menu. "
         "Use this whenever a decision needs the user's input before proceeding.",
         p5, r5));
+
+    json_object *p6 = json_object_new_object();
+    json_object_object_add(p6, "name", prop("string", "Name of the skill to load"));
+    json_object_array_add(tools, make_tool(
+        "skill",
+        "Load the full instructions of an available skill by name. Use this when a "
+        "task matches one of the skills listed in the system prompt.",
+        p6, required1("name")));
 
     return tools;
 }
