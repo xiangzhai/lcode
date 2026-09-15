@@ -9,7 +9,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#define APPEND_PROMPT_FILE "LCODE.md"
+#define APPEND_PROMPT_FILE "AGENTS.md"
 #define DEFAULT_MAX_ITERATIONS 64
 
 static const char *env_or(const char *name, const char *fallback)
@@ -82,7 +82,7 @@ static void usage(const char *prog)
             "  -h, --help                  show this help\n"
             "  -V, --version               show version and exit\n"
             "env: DEEPSEEK_API_KEY (required), DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, LCODE_HOME\n"
-            "note: LCODE.md in the current directory is auto-appended to the system prompt\n",
+            "note: AGENTS.md in the current directory is auto-appended to the system prompt\n",
             prog);
 }
 
