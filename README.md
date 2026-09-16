@@ -1,229 +1,248 @@
 # lcode
 
-一个用 C 编写的命令行编码 agent，对接 DeepSeek 的 OpenAI 兼容 Chat Completions API，支持多轮对话与函数调用（工具调用）。
+A command-line coding agent written in C. It talks to DeepSeek's OpenAI-compatible Chat Completions API and supports multi-turn conversations and function calling (tool use).
 
-## 功能
+## Features
 
-- 交互式 REPL，多轮上下文
-- 可随时打断：模型请求或工具执行途中按 `ESC` 立即中止当前回合，随后可输入一条新指示让模型换思路继续
-- Session 管理：会话以 JSON 持久化到磁盘，可通过命名、恢复、列出与切换
-- Token 用量统计：每次请求后在 stderr 输出 prompt / completion / total 与缓存命中率，`/usage` 查看累计
-- Function Calling 工具循环，模型可连续调用多个工具
-- 内置工具：
-  - `read_file` —— 读取文本文件
-  - `write_file` —— 写入（覆盖）文本文件
-  - `list_dir` —— 列出目录内容（类型与大小）
-  - `run_shell` —— 执行 shell 命令并返回输出与退出码
-  - `ask_user` —— 当需要用户在多个选项中做出选择时，弹出交互式菜单（方向键/数字键选择，`Enter` 确认，`q`/`Esc` 取消；非 TTY 环境退化为编号输入）
-    - 配合 `--non-interactive`（或 `-y`）使用时不弹菜单，改为把决策权交回模型，由其自行选择并静默完成任务
-- Skills：从约定目录自动发现技能（`SKILL.md`），在 system prompt 中列出，模型按需通过 `skill` 工具加载完整指令
+- Interactive REPL with multi-turn context
+- Interruptible at any time: press `ESC` while a model request or a tool execution is in flight to abort the current turn, then type a new instruction to steer the model in a different direction
+- Session management: sessions are persisted to disk as JSON and can be named, resumed, listed, and switched
+- Token usage stats: after each request, prompt / completion / total and the cache hit rate are printed to stderr; use `/usage` for the running total
+- Function calling loop: the model can call multiple tools in a row
+- Built-in tools:
+  - `read_file` — read a text file
+  - `write_file` — write (overwrite) a text file
+  - `list_dir` — list directory entries (type and size)
+  - `run_shell` — run a shell command and return its output and exit code
+  - `ask_user` — show an interactive menu when the user must choose among several options (arrow/number keys to select, `Enter` to confirm, `q`/`Esc` to cancel; falls back to numbered input when not attached to a TTY)
+    - With `--non-interactive` (or `-y`) no menu is shown; the decision is handed back to the model, which picks for itself and completes the task silently
+- Skills: automatically discover skills (`SKILL.md`) from convention directories, list them in the system prompt, and let the model load a skill's full instructions on demand through the `skill` tool
 
-## 依赖
+## Dependencies
 
-构建需要 C11 编译器、CMake 以及以下开发库：
+Building requires a C11 compiler, CMake, and the following development libraries:
 
-| 依赖 | 用途 | 最低建议版本 |
+| Dependency | Purpose | Minimum recommended version |
 | --- | --- | --- |
-| CMake | 构建系统 | 3.13 |
-| GCC / Clang | C 编译器（需支持 C11） | GCC 8 / Clang 8 |
-| pkg-config | 查找依赖库 | 0.29 |
-| libcurl（开发包） | HTTP 请求 | 7.58 |
-| json-c（开发包） | JSON 解析与序列化 | 0.12 |
-| GNU Readline（开发包） | 交互式输入与历史 | 7.0 |
+| CMake | Build system | 3.13 |
+| GCC / Clang | C compiler (must support C11) | GCC 8 / Clang 8 |
+| pkg-config | Locate dependency libraries | 0.29 |
+| libcurl (dev package) | HTTP requests | 7.58 |
+| json-c (dev package) | JSON parsing and serialization | 0.12 |
+| GNU Readline (dev package) | Interactive input and history | 7.0 |
 
-### 各发行版安装命令
+### Install commands per distribution
 
-Debian / Ubuntu：
+Debian / Ubuntu:
 
 ```sh
 sudo apt update
 sudo apt install -y build-essential cmake pkg-config libcurl4-openssl-dev libjson-c-dev libreadline-dev
 ```
 
-Fedora / RHEL / CentOS：
+Fedora / RHEL / CentOS:
 
 ```sh
 sudo dnf install -y gcc cmake pkgconf-pkg-config libcurl-devel json-c-devel readline-devel
 ```
 
-Arch Linux：
+Arch Linux:
 
 ```sh
 sudo pacman -S --needed base-devel cmake pkgconf curl json-c readline
 ```
 
-macOS（Homebrew）：
+macOS (Homebrew):
 
 ```sh
 brew install cmake pkg-config curl json-c readline
 ```
 
-> macOS 上系统自带的 `curl`/`readline` 可能无法被 pkg-config 找到，Homebrew 安装后通常需要设置
-> `export PKG_CONFIG_PATH="$(brew --prefix)/opt/curl/lib/pkgconfig:$(brew --prefix)/opt/readline/lib/pkgconfig:$PKG_CONFIG_PATH"`。
+> On macOS the system-provided `curl`/`readline` may not be found by pkg-config. After installing via
+> Homebrew you usually need to set
+> `export PKG_CONFIG_PATH="$(brew --prefix)/opt/curl/lib/pkgconfig:$(brew --prefix)/opt/readline/lib/pkgconfig:$PKG_CONFIG_PATH"`.
 
-## 构建
+## Build
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(nproc)"
 ```
 
-生成的二进制文件为 `build/lcode`。
+The resulting binary is `build/lcode`.
 
-如需调试构建：
+For a debug build:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j
 ```
 
-## 配置
+## Configuration
 
-通过环境变量提供密钥：
+Provide the key through an environment variable:
 
 ```sh
 export DEEPSEEK_API_KEY=sk-xxxxxxxx
 ```
 
-可选环境变量：
+Optional environment variables:
 
-| 变量 | 说明 | 默认值 |
+| Variable | Description | Default |
 | --- | --- | --- |
-| `DEEPSEEK_API_KEY` | API 密钥（必填） | 无 |
-| `DEEPSEEK_BASE_URL` | API 基础地址 | `https://api.deepseek.com` |
-| `DEEPSEEK_MODEL` | 模型名称 | `deepseek-v4-flash` |
-| `LCODE_HOME` | session 存储根目录（会话位于其下 `sessions/`） | `$XDG_DATA_HOME/lcode`，否则 `~/.local/share/lcode` |
+| `DEEPSEEK_API_KEY` | API key (required) | none |
+| `DEEPSEEK_BASE_URL` | API base URL | `https://api.deepseek.com` |
+| `DEEPSEEK_MODEL` | Model name | `deepseek-v4-flash` |
+| `LCODE_HOME` | Root directory for session storage (sessions live under its `sessions/`) | `$XDG_DATA_HOME/lcode`, otherwise `~/.local/share/lcode` |
 
-## 运行
+## Running
 
 ```sh
 ./build/lcode
 ```
 
-命令行参数（会覆盖对应环境变量）：
+Command-line options (these override the corresponding environment variables):
 
 ```
---model <name>                     指定模型，默认 deepseek-v4-flash
---base-url <url>                   指定 API 基础地址
---system-prompt <text>             替换内置 system prompt
---system-prompt-file <path>        从文件读取 system prompt（替换内置）
---append-system-prompt <text>      在内置 system prompt 后追加指令
---append-system-prompt-file <path> 追加文件内容到 system prompt
---prompt <text>                    启动时预加载首条用户提示词并自动发送
---prompt-file <path>               从文件读取首条用户提示词
---session <name>                   打开或创建命名 session
---resume                           恢复最近更新的 session
---list-sessions                    列出已保存的 session 并退出
---list-skills                      列出已发现的 skills 并退出
---non-interactive, -y              非交互模式：由模型自行决策，不询问用户；
-                                   若同时给出 --prompt/--prompt-file，跑完即退出
---max-iterations <n>               单轮最多工具调用轮数，默认 64
--h, --help                         显示帮助
--V, --version                      显示版本并退出
+--model <name>                     model name, defaults to deepseek-v4-flash
+--base-url <url>                   API base URL
+--system-prompt <text>             replace the built-in system prompt
+--system-prompt-file <path>        read the system prompt from a file (replaces the built-in one)
+--append-system-prompt <text>      append instructions after the built-in system prompt
+--append-system-prompt-file <path> append file contents to the system prompt
+--prompt <text>                    preload an initial user prompt and send it at startup
+--prompt-file <path>               read the initial user prompt from a file
+--session <name>                   open or create a named session
+--resume                           resume the most recently updated session
+--list-sessions                    list saved sessions and exit
+--list-skills                      list discovered skills and exit
+--non-interactive, -y              non-interactive mode: let the model decide, never ask the user;
+                                   if --prompt/--prompt-file is also given, exit once it finishes
+--max-iterations <n>               max tool-call rounds per turn, defaults to 64
+-h, --help                         show help
+-V, --version                      show version and exit
 ```
 
-示例：
+Examples:
 
 ```sh
 ./build/lcode --model deepseek-v4-flash
-./build/lcode --append-system-prompt "始终使用中文回答"
-./build/lcode --prompt "先列出当前目录，然后总结项目结构"
+./build/lcode --append-system-prompt "always answer in Chinese"
+./build/lcode --prompt "list the current directory first, then summarize the project structure"
 ./build/lcode --system-prompt-file prompts/reviewer.md --prompt-file prompts/task.md
-./build/lcode --session refactor-auth        # 打开/新建命名会话
-./build/lcode --resume                       # 恢复最近一次会话
-./build/lcode --list-sessions                # 列出全部会话
+./build/lcode --session refactor-auth        # open/create a named session
+./build/lcode --resume                       # resume the most recent session
+./build/lcode --list-sessions                # list all sessions
 ```
 
-> 预加载的首条提示词会在进入 REPL 前自动发送，之后仍可继续交互输入；`--prompt` 与
-> `--prompt-file` 同时给出时，以文件内容为准（按参数出现顺序，后出现者覆盖前者）。
+> The preloaded initial prompt is sent automatically before entering the REPL; you can keep typing
+> afterwards. When both `--prompt` and `--prompt-file` are given, the file contents win (options are
+> applied in order, so whichever appears later overrides the earlier one).
 
-启动时会自动读取**当前目录**下的 `AGENTS.md`，将其内容追加到 system prompt（等价于
-`--append-system-prompt-file AGENTS.md`）。若显式指定了 `--append-system-prompt` 或
-`--append-system-prompt-file`，则以显式参数为准，不再加载 `AGENTS.md`。可用它固化项目的
-开发与调试约定，例如仓库自带的 `AGENTS.md`。
+At startup, lcode reads `AGENTS.md` from the **current directory** and appends its contents to the
+system prompt (equivalent to `--append-system-prompt-file AGENTS.md`). If `--append-system-prompt` or
+`--append-system-prompt-file` is given explicitly, that takes precedence and `AGENTS.md` is not loaded.
+Use it to pin down a project's development and debugging conventions, as this repository's own
+`AGENTS.md` does.
 
-## Session 管理
+## Session management
 
-每个会话把完整的消息历史（含 system / user / assistant / tool）保存为一个 JSON 文件，
-默认位于 `~/.local/share/lcode/sessions/<name>.json`（可用 `LCODE_HOME` 覆盖根目录）。
-每轮对话结束后自动保存；启动时若无 `--session`，会新建一个带时间戳的会话。
+Each session stores the full message history (system / user / assistant / tool) in a single JSON file,
+by default at `~/.local/share/lcode/sessions/<name>.json` (override the root with `LCODE_HOME`).
+It is saved automatically after each turn; at startup, if no `--session` is given, a new timestamped
+session is created.
 
-CLI：`--session <name>` 打开或创建、`--resume` 恢复最近一个、`--list-sessions` 列出并退出。
+CLI: `--session <name>` to open or create, `--resume` to resume the most recent one, `--list-sessions`
+to list and exit.
 
-REPL 内命令：
+REPL commands:
 
 ```
-/new [name]      新建会话（自动保存当前会话）
-/list            列出已保存的会话
-/switch <name>   保存当前会话并切换到另一个
-/delete <name>   删除某个会话（不能删除当前会话）
-/session         显示当前会话名
-/save            立即保存当前会话
-/usage           显示当前会话的 token 用量与缓存命中率
-/skills          列出已发现的 skills
-/exit            保存并退出（等价于 Ctrl-D）
-/help            显示命令帮助
+/new [name]      start a new session (saves the current one)
+/list            list saved sessions
+/switch <name>   save the current session and switch to another
+/delete <name>   delete a saved session (cannot delete the current one)
+/session         show the current session name
+/save            save the current session now
+/usage           show token usage and cache hit rate for this session
+/skills          list discovered skills
+/exit            save and exit (same as Ctrl-D)
+/help            show command help
 ```
 
-> 恢复会话时会保留历史对话，但第一个 system 消息会被替换为当前启动配置生成的 system
-> prompt（因此 `AGENTS.md`、`--append-system-prompt` 等改动会即时生效）。
+> Resuming a session keeps the previous conversation, but the first system message is replaced with
+> the system prompt generated from the current startup configuration (so changes to `AGENTS.md`,
+> `--append-system-prompt`, etc. take effect immediately).
 
 ## Skills
 
-Skill 用于把特定任务的详细指令按需注入上下文，而不是一开始就占用 system prompt。
+A skill injects detailed instructions for a specific task on demand, instead of occupying the system
+prompt up front.
 
-发现顺序如下（同名时以先发现者为准）：
+Skills are discovered in the following order (when names collide, the first one found wins):
 
-1. 当前目录下的 `.lcode/skills/`（项目级）
-2. 全局目录：`$LCODE_HOME/skills`，否则 `$XDG_DATA_HOME/lcode/skills`，否则 `~/.local/share/lcode/skills`
+1. `.lcode/skills/` in the current directory (project-level)
+2. The global directory: `$LCODE_HOME/skills`, otherwise `$XDG_DATA_HOME/lcode/skills`, otherwise
+   `~/.local/share/lcode/skills`
 
-每个 skill 可以是一个包含 `SKILL.md` 的子目录，也可以是技能目录下的一个独立 `*.md` 文件。
-文件开头可选的 YAML frontmatter 用于提供 `name` 与 `description`：
+Each skill is either a subdirectory containing `SKILL.md` or a standalone `*.md` file directly under a
+skills directory. An optional YAML frontmatter block at the top of the file provides `name` and
+`description`:
 
 ```md
 ---
 name: pdf-forms
-description: 填写和校验 PDF 表单
+description: Fill in and validate PDF forms
 ---
 
-# 步骤
+# Steps
 1. ...
 ```
 
-未提供 `name` 时使用目录名（或文件名），未提供 `description` 时取正文第一行。
+When `name` is omitted, the directory name (or file name) is used; when `description` is omitted, the
+first line of the body is used.
 
-启动时 lcode 会把所有 skill 的名称与描述追加到 system prompt；当任务匹配时，模型调用
-`skill` 工具（参数 `name`）加载该文件的完整正文。用 `--list-skills` 或 REPL 的 `/skills`
-查看已发现的列表。
+At startup lcode appends the name and description of every skill to the system prompt; when a task
+matches, the model calls the `skill` tool (argument `name`) to load the file's full body. Use
+`--list-skills` or the REPL's `/skills` to see the discovered list.
 
-## 用量与缓存
+## Usage and caching
 
-每次 API 请求后，lcode 会从响应的 `usage` 中统计用量并输出到 **stderr**（暗色行），
-因此不会污染对话内容，也不会被写入会话历史、影响前缀缓存：
+After each API request, lcode reads the `usage` field of the response and prints the stats to
+**stderr** (in a dim line), so it does not pollute the conversation, get written to session history,
+or affect prefix caching:
 
 ```
 [usage] prompt 1200 (cache hit 1100 / miss 100, 91.7%), completion 12, total 1212
 ```
 
-`/usage` 显示当前会话的累计值；命中率 = `cache_hit / (cache_hit + cache_miss)`。统计同时
-兼容 DeepSeek 的 `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` 与 OpenAI 风格的
-`prompt_tokens_details.cached_tokens`。累计值仅保存在进程内，重启后从零开始。
+`/usage` shows the running total for the current session; the hit rate is
+`cache_hit / (cache_hit + cache_miss)`. The stats understand both DeepSeek's
+`prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` and the OpenAI-style
+`prompt_tokens_details.cached_tokens`. The running total lives only in the process and starts from
+zero after a restart.
 
-进入 REPL 后直接输入需求，例如：
+Once in the REPL, just type your request, for example:
 
 ```
-> 列出当前目录，然后读取 CMakeLists.txt 并解释构建配置
+> list the current directory, then read CMakeLists.txt and explain the build configuration
 ```
 
-按 `Ctrl-D` 退出。
+Press `Ctrl-D` to exit.
 
-## 打断与纠偏
+## Interrupting and redirecting
 
-当模型正在请求 API 或执行工具、而你发现它耗时跑偏时，按一次 `ESC` 即可打断：
+When the model is calling the API or running a tool and you notice it is taking too long or going off
+track, press `ESC` once to interrupt:
 
-- 正在进行的 HTTP 请求会被中止，正在运行的 `run_shell` 子进程会被结束，未完成的工具调用会以“interrupted by user”占位补全，保证会话消息序列完整；
-- 随后会提示 `redirect>`，输入一条新的指示（例如“别用 sed，改用 patch”）让模型换思路，回车即跳过；
-- 新的指示会作为一条 user 消息追加进当前会话，模型带着原有上下文按新方向继续；
-- 在 `--non-interactive` 模式下不弹提示，打断后直接结束本轮。
+- the in-flight HTTP request is aborted, a running `run_shell` child process is killed, and any
+  unfinished tool calls are filled in with an "interrupted by user" placeholder so the session's
+  message sequence stays valid;
+- you are then prompted with `redirect>`, where you can type a new instruction (for example, "don't use
+  sed, use patch") to steer the model; press Enter to skip;
+- the new instruction is appended to the current session as a user message, and the model continues in
+  the new direction with its existing context;
+- in `--non-interactive` mode no prompt appears and the turn ends immediately after the interrupt.
 
-系统会把被中断的回合完整保存进 session，恢复会话后可继续接着处理。
+The interrupted turn is saved in full to the session, so you can pick up where you left off after
+resuming.

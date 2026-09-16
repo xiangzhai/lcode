@@ -1,39 +1,39 @@
-# lcode 开发提示
+# lcode development notes
 
-本文件会在当前目录启动 lcode 时自动追加到系统提示词。以下约定适用于本仓库（用 C11 编写的命令行编码 agent，对接 DeepSeek OpenAI 兼容 Chat Completions API）。
+This file is automatically appended to the system prompt when lcode is started in this directory. The conventions below apply to this repository (a command-line coding agent written in C11 that talks to DeepSeek's OpenAI-compatible Chat Completions API).
 
-## 项目结构
+## Project structure
 
-- `src/main.c` —— 入口：环境变量与命令行参数解析、`AGENTS.md` 自动加载
-- `src/agent.c` —— 系统提示词、消息构建、REPL 与工具调用主循环
-- `src/http.c` —— 基于 libcurl 的 HTTP POST，封装 `HttpResponse`
-- `src/tools.c` —— 工具 schema 与实现（`read_file` / `write_file` / `list_dir` / `run_shell`）
-- `src/skills.c` —— skill 发现与加载（`.lcode/skills`、全局 skills 目录、`SKILL.md` frontmatter）
-- `include/*.h` —— 对应模块头文件
-- `test/` —— 测试代码
-- `CMakeLists.txt` —— 构建配置
+- `src/main.c` — entry point: environment and command-line argument parsing, `AGENTS.md` auto-loading
+- `src/agent.c` — system prompt, message construction, REPL and the tool-calling main loop
+- `src/http.c` — libcurl-based HTTP POST, wraps `HttpResponse`
+- `src/tools.c` — tool schemas and implementations (`read_file` / `write_file` / `list_dir` / `run_shell`)
+- `src/skills.c` — skill discovery and loading (`.lcode/skills`, global skills directory, `SKILL.md` frontmatter)
+- `include/*.h` — corresponding module headers
+- `test/` — test code
+- `CMakeLists.txt` — build configuration
 
-## 构建与验证
+## Build and verification
 
-- 配置：`cmake -S . -B build -DCMAKE_BUILD_TYPE=Release`
-- 构建：`cmake --build build -j"$(nproc)"`
-- 调试构建：`-DCMAKE_BUILD_TYPE=Debug`
-- 修改后必须重新构建，并确保在 `-Wall -Wextra` 下没有新增警告。
-- 运行：`./build/lcode`；测试时可用 `--base-url` 指向本地 mock 服务，避免真实调用 API。
+- Configure: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release`
+- Build: `cmake --build build -j"$(nproc)"`
+- Debug build: `-DCMAKE_BUILD_TYPE=Debug`
+- Always rebuild after changes, and make sure `-Wall -Wextra` reports no new warnings.
+- Run: `./build/lcode`; for testing, point `--base-url` at a local mock service to avoid real API calls.
 
-## 代码约定
+## Code conventions
 
-- 使用 C11 与 `_GNU_SOURCE`，可放心使用 `asprintf`、`strdup`、`getline` 等 GNU/POSIX 扩展。
-- 4 空格缩进，同现有文件风格保持一致；除非必要，不要添加注释。
-- 优先沿用已有工具函数与模式（如 `env_or`、`read_whole_file`、`arg_str`、`sb_*` 缓冲）。
-- 动态内存必须成对释放；错误路径同样要清理，避免泄漏。
-- 不要引入新的第三方依赖，除非有充分理由；依赖通过 pkg-config 查找。
-- 对外可见的接口放在 `include/` 头文件中，保持简洁。
+- Use C11 with `_GNU_SOURCE`; feel free to use GNU/POSIX extensions such as `asprintf`, `strdup`, and `getline`.
+- Use 4-space indentation and match the style of the existing files; do not add comments unless necessary.
+- Prefer reusing existing helpers and patterns (such as `env_or`, `read_whole_file`, `arg_str`, the `sb_*` buffer).
+- Dynamic memory must be freed in pairs; clean up on error paths too, to avoid leaks.
+- Do not introduce new third-party dependencies without good reason; dependencies are located via pkg-config.
+- Keep public interfaces in the `include/` headers and keep them concise.
 
-## 行为约定
+## Behavioral conventions
 
-- 新增命令行参数或环境变量时，同步更新 `usage()` 与 `README.md`。
-- 使用 LLM 开发 lcode 时，git commit 信息需要加上 `Co-authored-by` 标注所用模型。
-- 涉及网络请求、文件读写、错误处理时，给出清晰可读的错误信息。
-- 保持改动最小化，聚焦当前任务，不做无关重构。
-- 完成前简要说明改动内容及验证方式（构建/运行结果）。
+- When adding a command-line option or environment variable, update `usage()` and `README.md` accordingly.
+- When using an LLM to develop lcode, the git commit message must include a `Co-authored-by` line crediting the model used.
+- For network requests, file I/O, and error handling, produce clear, readable error messages.
+- Keep changes minimal and focused on the current task; do not perform unrelated refactoring.
+- Before finishing, briefly state what changed and how it was verified (build/run results).
