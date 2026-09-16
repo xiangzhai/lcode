@@ -67,7 +67,7 @@ static void usage(const char *prog)
 {
     fprintf(stderr,
             "usage: %s [options]\n"
-            "  --model <name>              model id (default: deepseek-v4-flash)\n"
+            "  --model <name>              model id (default: deepseek-flash)\n"
             "  --base-url <url>            API base url (default: https://api.deepseek.com)\n"
             "  --system-prompt <text>      replace the built-in system prompt\n"
             "  --system-prompt-file <path> read the system prompt from a file\n"
@@ -94,7 +94,7 @@ int main(int argc, char **argv)
     AgentConfig cfg;
     cfg.api_key = getenv("DEEPSEEK_API_KEY");
     cfg.base_url = env_or("DEEPSEEK_BASE_URL", "https://api.deepseek.com");
-    cfg.model = env_or("DEEPSEEK_MODEL", "deepseek-v4-flash");
+    cfg.model = env_or("DEEPSEEK_MODEL", "deepseek-flash");
     cfg.system_prompt = NULL;
     cfg.append_system_prompt = NULL;
     cfg.initial_prompt = NULL;

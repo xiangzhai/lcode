@@ -92,7 +92,7 @@ Optional environment variables:
 | --- | --- | --- |
 | `DEEPSEEK_API_KEY` | API key (required) | none |
 | `DEEPSEEK_BASE_URL` | API base URL | `https://api.deepseek.com` |
-| `DEEPSEEK_MODEL` | Model name | `deepseek-v4-flash` |
+| `DEEPSEEK_MODEL` | Model name | `deepseek-flash` |
 | `LCODE_HOME` | Root directory for session storage (sessions live under its `sessions/`) | `$XDG_DATA_HOME/lcode`, otherwise `~/.local/share/lcode` |
 
 ## Running
@@ -104,7 +104,7 @@ Optional environment variables:
 Command-line options (these override the corresponding environment variables):
 
 ```
---model <name>                     model name, defaults to deepseek-v4-flash
+--model <name>                     model name, defaults to deepseek-flash
 --base-url <url>                   API base URL
 --system-prompt <text>             replace the built-in system prompt
 --system-prompt-file <path>        read the system prompt from a file (replaces the built-in one)
@@ -126,7 +126,7 @@ Command-line options (these override the corresponding environment variables):
 Examples:
 
 ```sh
-./build/lcode --model deepseek-v4-flash
+./build/lcode --model deepseek-flash
 ./build/lcode --append-system-prompt "always answer in Chinese"
 ./build/lcode --prompt "list the current directory first, then summarize the project structure"
 ./build/lcode --system-prompt-file prompts/reviewer.md --prompt-file prompts/task.md
