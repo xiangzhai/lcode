@@ -1,5 +1,7 @@
 # lcode
 
+[English](README.md) | [简体中文](README_CN.md)
+
 A command-line coding agent written in C. It talks to DeepSeek's OpenAI-compatible Chat Completions API and supports multi-turn conversations and function calling (tool use).
 
 ## Features
