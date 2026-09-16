@@ -587,15 +587,23 @@ static int read_key(void)
     return KEY_OTHER;
 }
 
+/*
+ * Draw the menu starting at the current line. The cursor is left on the last
+ * option line so that callers can move back up with "\033[<n>A" and redraw in
+ * place; relying on save/restore cursor instead breaks as soon as the menu is
+ * printed near the bottom and the terminal scrolls.
+ */
 static void render_menu(const char *question, char *const *opts, int n, int sel)
 {
     printf("\r\033[2K\033[1;36m? %s\033[0m\n", question);
     for (int i = 0; i < n; i++) {
-        printf("\033[2K");
+        printf("\r\033[2K");
         if (i == sel)
-            printf("\033[1;36m> %d) %s\033[0m\n", i + 1, opts[i]);
+            printf("\033[1;36m> %d) %s\033[0m", i + 1, opts[i]);
         else
-            printf("  %d) %s\n", i + 1, opts[i]);
+            printf("  %d) %s", i + 1, opts[i]);
+        if (i != n - 1)
+            printf("\n");
     }
     fflush(stdout);
 }
@@ -624,7 +632,6 @@ static char *ask_interactive(const char *question, char *const *opts, int n)
     int sel = 0;
     int chosen = -1;
 
-    printf("\0337");
     render_menu(question, opts, n, sel);
 
     while (1) {
@@ -644,12 +651,12 @@ static char *ask_interactive(const char *question, char *const *opts, int n)
         } else {
             continue;
         }
-        printf("\0338\033[J");
+        printf("\033[%dA", n);
         render_menu(question, opts, n, sel);
     }
 
     tcsetattr(STDIN_FILENO, TCSANOW, &orig);
-    printf("\0338\033[J");
+    printf("\033[%dA\r\033[J", n);
     fflush(stdout);
 
     if (chosen < 0)
