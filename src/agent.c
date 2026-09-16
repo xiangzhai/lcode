@@ -397,7 +397,12 @@ static int run_turn(AgentConfig *cfg, json_object *messages, const char *url,
                     UsageTotals *usage)
 {
     interrupt_clear();
-    for (int iter = 0; iter < cfg->max_iterations; iter++) {
+    for (int iter = 0;; iter++) {
+        if (cfg->max_iterations > 0 && iter > 0 && iter % cfg->max_iterations == 0)
+            fprintf(stderr,
+                    "\033[1;33m[notice]\033[0m reached %d tool-call rounds, "
+                    "continuing until the model stops calling tools\n",
+                    cfg->max_iterations);
         if (interrupt_pending())
             return TURN_INTERRUPTED;
 
@@ -506,9 +511,6 @@ static int run_turn(AgentConfig *cfg, json_object *messages, const char *url,
 
         json_object_put(root);
     }
-
-    fprintf(stderr, "reached max tool iterations (%d)\n", cfg->max_iterations);
-    return TURN_OK;
 }
 
 static int run_turn_with_redirect(AgentConfig *cfg, json_object *messages,

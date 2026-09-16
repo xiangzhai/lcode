@@ -11,7 +11,7 @@
 #include <unistd.h>
 
 #define APPEND_PROMPT_FILE "AGENTS.md"
-#define DEFAULT_MAX_ITERATIONS 64
+#define DEFAULT_MAX_ITERATIONS 0
 
 static const char *env_or(const char *name, const char *fallback)
 {
@@ -80,7 +80,8 @@ static void usage(const char *prog)
             "  --list-sessions             list saved sessions and exit\n"
             "  --list-skills               list available skills and exit\n"
             "  --non-interactive, -y       let the model decide; never ask, exit after --prompt\n"
-            "  --max-iterations <n>        max tool-call rounds per turn (default: 64)\n"
+            "  --max-iterations <n>        print a notice every n tool-call rounds; the turn\n"
+            "                              runs until the model stops (0 = unlimited, default)\n"
             "  -h, --help                  show this help\n"
             "  -V, --version               show version and exit\n"
             "env: DEEPSEEK_API_KEY (required), DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, LCODE_HOME\n"
@@ -151,7 +152,7 @@ int main(int argc, char **argv)
             cfg.non_interactive = 1;
         } else if (strcmp(argv[i], "--max-iterations") == 0 && i + 1 < argc) {
             cfg.max_iterations = atoi(argv[++i]);
-            if (cfg.max_iterations <= 0)
+            if (cfg.max_iterations < 0)
                 cfg.max_iterations = DEFAULT_MAX_ITERATIONS;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             usage(argv[0]);

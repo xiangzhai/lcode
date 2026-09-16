@@ -118,7 +118,9 @@ Command-line options (these override the corresponding environment variables):
 --list-skills                      list discovered skills and exit
 --non-interactive, -y              non-interactive mode: let the model decide, never ask the user;
                                    if --prompt/--prompt-file is also given, exit once it finishes
---max-iterations <n>               max tool-call rounds per turn, defaults to 64
+--max-iterations <n>               print a notice every n tool-call rounds; a turn keeps
+                                   running until the model stops calling tools (0 = unlimited,
+                                   the default)
 -h, --help                         show help
 -V, --version                      show version and exit
 ```
