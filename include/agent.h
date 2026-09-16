@@ -11,6 +11,8 @@ typedef struct {
     const char *session;
     int non_interactive;
     int max_iterations;
+    int thinking;                  /* 1 = DeepSeek thinking mode, 0 = disabled */
+    const char *reasoning_effort;  /* low / medium / high / max ... */
 } AgentConfig;
 
 int agent_run(AgentConfig *cfg);

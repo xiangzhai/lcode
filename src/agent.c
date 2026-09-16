@@ -74,6 +74,13 @@ static void print_tool_call(const char *name, const char *args_str, json_object 
     printf("\n\033[1;33m[tool] %s %s\033[0m\n", name ? name : "(unknown)", args_str);
 }
 
+static void print_reasoning(const char *text)
+{
+    if (!text || !*text)
+        return;
+    printf("\n\033[0;90m[thinking]\033[0m\n\033[0;90m%s\033[0m\n", text);
+}
+
 static json_object *build_messages(AgentConfig *cfg)
 {
     json_object *messages = json_object_new_array();
@@ -126,7 +133,19 @@ static json_object *build_request(AgentConfig *cfg, json_object *messages)
     json_object_object_add(req, "messages", json_object_get(messages));
     json_object_object_add(req, "tools", tools_schema());
     json_object_object_add(req, "tool_choice", json_object_new_string("auto"));
-    json_object_object_add(req, "temperature", json_object_new_double(0.2));
+
+    json_object *thinking = json_object_new_object();
+    json_object_object_add(thinking, "type",
+                           json_object_new_string(cfg->thinking ? "enabled" : "disabled"));
+    json_object_object_add(req, "thinking", thinking);
+
+    if (cfg->thinking) {
+        if (cfg->reasoning_effort && *cfg->reasoning_effort)
+            json_object_object_add(req, "reasoning_effort",
+                                   json_object_new_string(cfg->reasoning_effort));
+    } else {
+        json_object_object_add(req, "temperature", json_object_new_double(0.2));
+    }
     return req;
 }
 
@@ -453,6 +472,9 @@ static int run_turn(AgentConfig *cfg, json_object *messages, const char *url,
             return TURN_ERROR;
         }
 
+        if (cfg->thinking)
+            print_reasoning(json_string_at(message, "reasoning_content"));
+
         const char *text = json_string_at(message, "content");
         if (text && *text)
             printf("\n%s\n", text);
@@ -581,6 +603,12 @@ int agent_run(AgentConfig *cfg)
     }
 
     printf("lcode - coding agent (%s)\n", cfg->model);
+    if (cfg->thinking && cfg->reasoning_effort && *cfg->reasoning_effort)
+        printf("thinking: enabled (effort %s)\n", cfg->reasoning_effort);
+    else if (cfg->thinking)
+        printf("thinking: enabled\n");
+    else
+        printf("thinking: disabled\n");
     printf("session: %s%s\n", session_name, resumed ? " (resumed)" : "");
     printf("Type your request, Ctrl-D to exit. Press ESC to interrupt the model. "
            "/help for session commands.\n");

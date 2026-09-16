@@ -63,6 +63,17 @@ static char *read_whole_file(const char *path, const char *what)
     return buf;
 }
 
+static int valid_reasoning_effort(const char *v)
+{
+    static const char *allowed[] = {
+        "minimal", "low", "medium", "high", "xhigh", "max", "ultra", NULL
+    };
+    for (int i = 0; allowed[i]; i++)
+        if (strcmp(v, allowed[i]) == 0)
+            return 1;
+    return 0;
+}
+
 static void usage(const char *prog)
 {
     fprintf(stderr,
@@ -80,11 +91,16 @@ static void usage(const char *prog)
             "  --list-sessions             list saved sessions and exit\n"
             "  --list-skills               list available skills and exit\n"
             "  --non-interactive, -y       let the model decide; never ask, exit after --prompt\n"
+            "  --thinking                  enable DeepSeek thinking mode (default)\n"
+            "  --no-thinking               disable thinking mode\n"
+            "  --reasoning-effort <level>  thinking effort: minimal|low|medium|high|xhigh|max|ultra\n"
+            "                              (default: high)\n"
             "  --max-iterations <n>        print a notice every n tool-call rounds; the turn\n"
             "                              runs until the model stops (0 = unlimited, default)\n"
             "  -h, --help                  show this help\n"
             "  -V, --version               show version and exit\n"
-            "env: DEEPSEEK_API_KEY (required), DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, LCODE_HOME\n"
+            "env: DEEPSEEK_API_KEY (required), DEEPSEEK_BASE_URL, DEEPSEEK_MODEL,\n"
+            "     DEEPSEEK_THINKING, DEEPSEEK_REASONING_EFFORT, LCODE_HOME\n"
             "note: AGENTS.md in the current directory is auto-appended to the system prompt\n"
             "note: skills are discovered in .lcode/skills and $LCODE_HOME/skills\n",
             prog);
@@ -102,6 +118,15 @@ int main(int argc, char **argv)
     cfg.session = NULL;
     cfg.non_interactive = 0;
     cfg.max_iterations = DEFAULT_MAX_ITERATIONS;
+    cfg.thinking = 1;
+    cfg.reasoning_effort = env_or("DEEPSEEK_REASONING_EFFORT", "high");
+
+    const char *think_env = getenv("DEEPSEEK_THINKING");
+    if (think_env && *think_env)
+        cfg.thinking = !(strcmp(think_env, "disabled") == 0 ||
+                         strcmp(think_env, "off") == 0 ||
+                         strcmp(think_env, "false") == 0 ||
+                         strcmp(think_env, "0") == 0);
 
     char *owned[10];
     int owned_n = 0;
@@ -150,6 +175,12 @@ int main(int argc, char **argv)
             list_skills = 1;
         } else if (strcmp(argv[i], "--non-interactive") == 0 || strcmp(argv[i], "-y") == 0) {
             cfg.non_interactive = 1;
+        } else if (strcmp(argv[i], "--thinking") == 0) {
+            cfg.thinking = 1;
+        } else if (strcmp(argv[i], "--no-thinking") == 0) {
+            cfg.thinking = 0;
+        } else if (strcmp(argv[i], "--reasoning-effort") == 0 && i + 1 < argc) {
+            cfg.reasoning_effort = argv[++i];
         } else if (strcmp(argv[i], "--max-iterations") == 0 && i + 1 < argc) {
             cfg.max_iterations = atoi(argv[++i]);
             if (cfg.max_iterations < 0)
@@ -165,6 +196,16 @@ int main(int argc, char **argv)
             usage(argv[0]);
             return 1;
         }
+    }
+
+    if (cfg.reasoning_effort && !valid_reasoning_effort(cfg.reasoning_effort)) {
+        fprintf(stderr,
+                "error: invalid reasoning effort '%s' "
+                "(expected minimal, low, medium, high, xhigh, max or ultra)\n",
+                cfg.reasoning_effort);
+        for (int k = 0; k < owned_n; k++)
+            free(owned[k]);
+        return 1;
     }
 
     if (list_sessions) {

@@ -9,6 +9,7 @@
 - 带多轮上下文的交互式 REPL
 - 随时可中断：在模型请求或工具执行过程中按 `ESC` 即可中止当前轮次，然后输入新的指示让模型转向其他方向
 - 会话管理：会话以 JSON 形式持久化到磁盘，可命名、恢复、列出与切换
+- DeepSeek 思考模式：默认开启，可通过 `--reasoning-effort` 配置强度；模型的思考内容会以暗淡文本前缀 `[thinking]` 打印
 - Token 用量统计：每次请求后会把 prompt / completion / total 以及缓存命中率打印到 stderr；使用 `/usage` 查看累计值
 - 函数调用循环：模型可以连续调用多个工具
 - 内置工具：
@@ -95,6 +96,8 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
 | `DEEPSEEK_API_KEY` | API 密钥（必需） | 无 |
 | `DEEPSEEK_BASE_URL` | API 基础地址 | `https://api.deepseek.com` |
 | `DEEPSEEK_MODEL` | 模型名称 | `deepseek-flash` |
+| `DEEPSEEK_THINKING` | 思考模式；设为 `disabled` / `off` / `false` / `0` 可关闭，其他任何值保持开启 | 开启 |
+| `DEEPSEEK_REASONING_EFFORT` | 思考强度：`minimal` / `low` / `medium` / `high` / `xhigh` / `max` / `ultra` | `high` |
 | `LCODE_HOME` | 会话存储的根目录（会话位于其下的 `sessions/`） | `$XDG_DATA_HOME/lcode`，否则为 `~/.local/share/lcode` |
 
 ## 运行
@@ -120,6 +123,10 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
 --list-skills                      列出已发现的技能并退出
 --non-interactive, -y              非交互模式：让模型自行决策、绝不询问用户；
                                    若同时给出 --prompt/--prompt-file，完成后即退出
+--thinking                         开启思考模式（默认）
+--no-thinking                      关闭思考模式
+--reasoning-effort <level>         思考强度：minimal|low|medium|high|xhigh|max|ultra
+                                   （默认：high）
 --max-iterations <n>               每 n 轮工具调用打印一次提示；一个轮次会持续
                                    运行，直到模型不再调用工具（0 = 不限，默认值）
 -h, --help                         显示帮助
@@ -136,6 +143,8 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
 ./build/lcode --session refactor-auth        # 打开/新建命名会话
 ./build/lcode --resume                       # 恢复最近的会话
 ./build/lcode --list-sessions                # 列出所有会话
+./build/lcode --no-thinking                  # 关闭思考模式
+./build/lcode --reasoning-effort max         # 使用最高思考强度
 ```
 
 > 预载的初始提示会在进入 REPL 之前自动发送；之后你可以继续输入。当同时给出 `--prompt` 和
@@ -222,6 +231,18 @@ description: Fill in and validate PDF forms
 ```
 
 按 `Ctrl-D` 退出。
+
+## 思考模式
+
+lcode 默认开启 DeepSeek 的思考模式。开启时，每次请求会发送 `thinking` 字段
+（`{"type": "enabled"}`）以及可选的 `reasoning_effort` 强度，模型返回的 `reasoning_content`
+会以暗淡文本、前缀 `[thinking]` 的形式打印（temperature 保持 API 默认值）。关闭思考模式时，
+lcode 改为发送 `{"type": "disabled"}` 并使用固定的 `temperature` `0.2`。
+
+可用 `--thinking` / `--no-thinking` 或环境变量 `DEEPSEEK_THINKING` 开关，用
+`--reasoning-effort <level>`（或 `DEEPSEEK_REASONING_EFFORT`）选择强度。有效取值为
+`minimal`、`low`、`medium`、`high`、`xhigh`、`max`、`ultra`，默认为 `high`。
+启动时会对非法的强度取值报错。
 
 ## 中断与重定向
 

@@ -9,6 +9,7 @@ A command-line coding agent written in C. It talks to DeepSeek's OpenAI-compatib
 - Interactive REPL with multi-turn context
 - Interruptible at any time: press `ESC` while a model request or a tool execution is in flight to abort the current turn, then type a new instruction to steer the model in a different direction
 - Session management: sessions are persisted to disk as JSON and can be named, resumed, listed, and switched
+- DeepSeek thinking mode: enabled by default, with a configurable `--reasoning-effort` level; the model's reasoning is printed in dim text as `[thinking]`
 - Token usage stats: after each request, prompt / completion / total and the cache hit rate are printed to stderr; use `/usage` for the running total
 - Function calling loop: the model can call multiple tools in a row
 - Built-in tools:
@@ -95,6 +96,8 @@ Optional environment variables:
 | `DEEPSEEK_API_KEY` | API key (required) | none |
 | `DEEPSEEK_BASE_URL` | API base URL | `https://api.deepseek.com` |
 | `DEEPSEEK_MODEL` | Model name | `deepseek-flash` |
+| `DEEPSEEK_THINKING` | Thinking mode; set to `disabled` / `off` / `false` / `0` to disable, any other value keeps it enabled | enabled |
+| `DEEPSEEK_REASONING_EFFORT` | Thinking effort: `minimal` / `low` / `medium` / `high` / `xhigh` / `max` / `ultra` | `high` |
 | `LCODE_HOME` | Root directory for session storage (sessions live under its `sessions/`) | `$XDG_DATA_HOME/lcode`, otherwise `~/.local/share/lcode` |
 
 ## Running
@@ -120,6 +123,10 @@ Command-line options (these override the corresponding environment variables):
 --list-skills                      list discovered skills and exit
 --non-interactive, -y              non-interactive mode: let the model decide, never ask the user;
                                    if --prompt/--prompt-file is also given, exit once it finishes
+--thinking                         enable thinking mode (default)
+--no-thinking                      disable thinking mode
+--reasoning-effort <level>         thinking effort: minimal|low|medium|high|xhigh|max|ultra
+                                   (default: high)
 --max-iterations <n>               print a notice every n tool-call rounds; a turn keeps
                                    running until the model stops calling tools (0 = unlimited,
                                    the default)
@@ -137,6 +144,8 @@ Examples:
 ./build/lcode --session refactor-auth        # open/create a named session
 ./build/lcode --resume                       # resume the most recent session
 ./build/lcode --list-sessions                # list all sessions
+./build/lcode --no-thinking                  # disable thinking mode
+./build/lcode --reasoning-effort max         # use the highest thinking effort
 ```
 
 > The preloaded initial prompt is sent automatically before entering the REPL; you can keep typing
@@ -233,6 +242,19 @@ Once in the REPL, just type your request, for example:
 ```
 
 Press `Ctrl-D` to exit.
+
+## Thinking mode
+
+lcode enables DeepSeek's thinking mode by default. When it is on, each request sends a `thinking`
+field (`{"type": "enabled"}`) and an optional `reasoning_effort` level, and any `reasoning_content`
+returned by the model is printed in dim text prefixed with `[thinking]` (temperature is left at the
+API default). When thinking is disabled, lcode instead sends `{"type": "disabled"}` and a fixed
+`temperature` of `0.2`.
+
+Toggle it with `--thinking` / `--no-thinking` or the `DEEPSEEK_THINKING` environment variable, and
+choose the effort with `--reasoning-effort <level>` (or `DEEPSEEK_REASONING_EFFORT`). Valid levels are
+`minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`; the default is `high`. An invalid
+level is rejected at startup.
 
 ## Interrupting and redirecting
 
