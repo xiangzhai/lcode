@@ -17,6 +17,11 @@ void interrupt_clear(void)
     g_interrupted = 0;
 }
 
+void interrupt_request(void)
+{
+    g_interrupted = 1;
+}
+
 int interrupt_pending(void)
 {
     return g_interrupted != 0;

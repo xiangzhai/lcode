@@ -5,6 +5,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -261,6 +262,7 @@ typedef struct {
     int status;
     int exited;
     int done;
+    int stop;
 } ShellJob;
 
 static void *shell_reader_thread(void *arg)
@@ -269,6 +271,25 @@ static void *shell_reader_thread(void *arg)
     char buf[4096];
 
     for (;;) {
+        pthread_mutex_lock(&job->lock);
+        int stop = job->stop;
+        pthread_mutex_unlock(&job->lock);
+        if (stop)
+            break;
+
+        struct pollfd pfd;
+        pfd.fd = job->fd;
+        pfd.events = POLLIN;
+        pfd.revents = 0;
+        int pr = poll(&pfd, 1, 100);
+        if (pr < 0) {
+            if (errno == EINTR)
+                continue;
+            break;
+        }
+        if (pr == 0)
+            continue;
+
         ssize_t n = read(job->fd, buf, sizeof(buf));
         if (n > 0) {
             pthread_mutex_lock(&job->lock);
@@ -345,7 +366,26 @@ static void display_drain(ShellJob *job, DisplayState *ds, int final)
     pthread_mutex_unlock(&job->lock);
 }
 
+/*
+ * Kill the command's whole process group. The child is made its own group
+ * leader, so this also reaches grandchildren (pipelines, make, ...) that would
+ * otherwise survive, keep the output pipe open and hang the reader thread.
+ */
+static void shell_job_kill(pid_t pid)
+{
+    if (kill(-pid, SIGKILL) != 0)
+        kill(pid, SIGKILL);
+}
+
 static int g_last_output_streamed = 0;
+
+static volatile sig_atomic_t g_shell_signaled = 0;
+
+static void shell_signal_handler(int sig)
+{
+    (void)sig;
+    g_shell_signaled = 1;
+}
 
 int tools_output_streamed(void)
 {
@@ -377,6 +417,7 @@ static char *tool_run_shell(json_object *args)
     }
 
     if (pid == 0) {
+        setpgid(0, 0);
         close(fds[0]);
         dup2(fds[1], STDOUT_FILENO);
         dup2(fds[1], STDERR_FILENO);
@@ -386,6 +427,7 @@ static char *tool_run_shell(json_object *args)
     }
 
     close(fds[1]);
+    setpgid(pid, pid);
 
     ShellJob job;
     memset(&job, 0, sizeof(job));
@@ -394,7 +436,7 @@ static char *tool_run_shell(json_object *args)
     pthread_mutex_init(&job.lock, NULL);
 
     if (sb_init(&job.sb, 1024) != 0) {
-        kill(pid, SIGKILL);
+        shell_job_kill(pid);
         close(fds[0]);
         waitpid(pid, NULL, 0);
         pthread_mutex_destroy(&job.lock);
@@ -402,6 +444,13 @@ static char *tool_run_shell(json_object *args)
     }
 
     interrupt_watch_begin();
+
+    struct sigaction sa, old_int;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = shell_signal_handler;
+    sigemptyset(&sa.sa_mask);
+    g_shell_signaled = 0;
+    sigaction(SIGINT, &sa, &old_int);
 
     int streamed = isatty(STDOUT_FILENO);
     static const char spinner[] = "|/-\\";
@@ -431,9 +480,13 @@ static char *tool_run_shell(json_object *args)
         if (done)
             break;
 
-        if (interrupt_poll()) {
+        if (interrupt_poll() || g_shell_signaled) {
             interrupted = 1;
-            kill(pid, SIGKILL);
+            pthread_mutex_lock(&job.lock);
+            job.stop = 1;
+            pthread_mutex_unlock(&job.lock);
+            shell_job_kill(pid);
+            interrupt_request();
             break;
         }
 
@@ -467,6 +520,7 @@ static char *tool_run_shell(json_object *args)
 
     close(fds[0]);
     interrupt_watch_end();
+    sigaction(SIGINT, &old_int, NULL);
 
     int status = job.exited ? job.status : 0;
 

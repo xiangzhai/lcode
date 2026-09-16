@@ -2,6 +2,7 @@
 #define LCODE_INTERRUPT_H
 
 void interrupt_clear(void);
+void interrupt_request(void);
 int interrupt_pending(void);
 
 void interrupt_watch_begin(void);
