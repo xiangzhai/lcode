@@ -550,7 +550,7 @@ static int run_turn_with_redirect(AgentConfig *cfg, json_object *messages,
         if (cfg->non_interactive)
             return rc;
 
-        char *line = readline("\033[1;33mredirect> \033[0m");
+        char *line = readline("\001\033[1;33m\002redirect> \001\033[0m\002");
         if (!line || !*line) {
             free(line);
             return rc;
@@ -630,7 +630,9 @@ int agent_run(AgentConfig *cfg)
     }
 
     while (1) {
-        char *line = readline("\n\033[1;36m> \033[0m");
+        /* \001/\002 mark the ANSI escapes as non-printing so readline
+           computes the prompt width correctly when the line wraps. */
+        char *line = readline("\n\001\033[1;36m\002> \001\033[0m\002");
         if (!line) {
             printf("\n");
             break;
