@@ -22,6 +22,7 @@ static const char *SYSTEM_PROMPT =
     "When the task is complete, reply to the user with a concise summary.";
 
 #define TOOL_OUTPUT_MAX_LINES 10
+#define REASONING_MAX_LINES 10
 
 static void print_tool_result(const char *result)
 {
@@ -78,7 +79,32 @@ static void print_reasoning(const char *text)
 {
     if (!text || !*text)
         return;
-    printf("\n\033[0;90m[thinking]\033[0m\n\033[0;90m%s\033[0m\n", text);
+
+    int lines = 0;
+    for (const char *p = text; *p; p++)
+        if (*p == '\n')
+            lines++;
+    if (text[strlen(text) - 1] != '\n')
+        lines++;
+
+    printf("\n\033[0;90m[thinking]\033[0m\n");
+
+    if (lines <= REASONING_MAX_LINES) {
+        printf("\033[0;90m%s\033[0m\n", text);
+        return;
+    }
+
+    const char *end = text;
+    int seen = 0;
+    while (*end && seen < REASONING_MAX_LINES) {
+        if (*end == '\n')
+            seen++;
+        end++;
+    }
+
+    printf("\033[0;90m%.*s\033[0m\n", (int)(end - text), text);
+    printf("\033[0;90m... (%d more lines hidden)\033[0m\n",
+           lines - REASONING_MAX_LINES);
 }
 
 static json_object *build_messages(AgentConfig *cfg)
