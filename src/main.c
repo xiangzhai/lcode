@@ -16,6 +16,8 @@
 
 #define APPEND_PROMPT_FILE "AGENTS.md"
 #define DEFAULT_MAX_ITERATIONS 0
+#define DEFAULT_CONTEXT_TOKENS 60000
+#define DEFAULT_CONTEXT_KEEP 8
 
 static const char *env_or(const char *name, const char *fallback)
 {
@@ -111,10 +113,17 @@ static void usage(const char *prog)
             "                              runs until the model stops (0 = unlimited, default)\n"
             "  --shell-timeout <seconds>   kill a run_shell command that runs longer than this\n"
             "                              (0 = no timeout, default: %d)\n"
+            "  --context-tokens <n>        compact the history once the prompt is estimated to\n"
+            "                              exceed n tokens (0 = disabled, default: 60000)\n"
+            "  --context-keep <n>          keep at least the last n messages when compacting\n"
+            "                              (default: 8)\n"
+            "  --context-strategy <s>      how to shrink history: summarize | truncate\n"
+            "                              (default: summarize)\n"
             "  -h, --help                  show this help\n"
             "  -V, --version               show version and exit\n"
             "env: DEEPSEEK_API_KEY (required), DEEPSEEK_BASE_URL, DEEPSEEK_MODEL,\n"
-            "     DEEPSEEK_THINKING, DEEPSEEK_REASONING_EFFORT, LCODE_HOME, LCODE_SHELL_TIMEOUT\n"
+            "     DEEPSEEK_THINKING, DEEPSEEK_REASONING_EFFORT, LCODE_HOME, LCODE_SHELL_TIMEOUT,\n"
+            "     LCODE_CONTEXT_TOKENS, LCODE_CONTEXT_KEEP, LCODE_CONTEXT_STRATEGY\n"
             "note: AGENTS.md in the current directory is auto-appended to the system prompt\n"
             "note: skills are discovered in .lcode/skills and $LCODE_HOME/skills\n"
             "note: lcode only accesses directories you have trusted; it asks per\n"
@@ -208,6 +217,25 @@ int main(int argc, char **argv)
     cfg.thinking = 1;
     cfg.reasoning_effort = env_or("DEEPSEEK_REASONING_EFFORT", "high");
 
+    cfg.context_max_tokens = DEFAULT_CONTEXT_TOKENS;
+    const char *ctx_tokens_env = getenv("LCODE_CONTEXT_TOKENS");
+    if (ctx_tokens_env && *ctx_tokens_env) {
+        cfg.context_max_tokens = atoi(ctx_tokens_env);
+        if (cfg.context_max_tokens < 0)
+            cfg.context_max_tokens = 0;
+    }
+    cfg.context_keep_recent = DEFAULT_CONTEXT_KEEP;
+    const char *ctx_keep_env = getenv("LCODE_CONTEXT_KEEP");
+    if (ctx_keep_env && *ctx_keep_env) {
+        cfg.context_keep_recent = atoi(ctx_keep_env);
+        if (cfg.context_keep_recent < 1)
+            cfg.context_keep_recent = 1;
+    }
+    cfg.context_summarize = 1;
+    const char *ctx_strategy_env = getenv("LCODE_CONTEXT_STRATEGY");
+    if (ctx_strategy_env && strcmp(ctx_strategy_env, "truncate") == 0)
+        cfg.context_summarize = 0;
+
     const char *think_env = getenv("DEEPSEEK_THINKING");
     if (think_env && *think_env)
         cfg.thinking = !(strcmp(think_env, "disabled") == 0 ||
@@ -225,6 +253,7 @@ int main(int argc, char **argv)
     int allow_dangerous = 0;
     int force_trust = 0;
     int resume = 0;
+    const char *context_strategy = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--model") == 0 && i + 1 < argc) {
@@ -295,6 +324,16 @@ int main(int argc, char **argv)
             cfg.shell_timeout = atoi(argv[++i]);
             if (cfg.shell_timeout < 0)
                 cfg.shell_timeout = 0;
+        } else if (strcmp(argv[i], "--context-tokens") == 0 && i + 1 < argc) {
+            cfg.context_max_tokens = atoi(argv[++i]);
+            if (cfg.context_max_tokens < 0)
+                cfg.context_max_tokens = 0;
+        } else if (strcmp(argv[i], "--context-keep") == 0 && i + 1 < argc) {
+            cfg.context_keep_recent = atoi(argv[++i]);
+            if (cfg.context_keep_recent < 1)
+                cfg.context_keep_recent = 1;
+        } else if (strcmp(argv[i], "--context-strategy") == 0 && i + 1 < argc) {
+            context_strategy = argv[++i];
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             usage(argv[0]);
             return 0;
@@ -316,6 +355,21 @@ int main(int argc, char **argv)
         for (int k = 0; k < owned_n; k++)
             free(owned[k]);
         return 1;
+    }
+
+    if (context_strategy) {
+        if (strcmp(context_strategy, "summarize") == 0)
+            cfg.context_summarize = 1;
+        else if (strcmp(context_strategy, "truncate") == 0)
+            cfg.context_summarize = 0;
+        else {
+            fprintf(stderr,
+                    "error: invalid context strategy '%s' (expected summarize or truncate)\n",
+                    context_strategy);
+            for (int k = 0; k < owned_n; k++)
+                free(owned[k]);
+            return 1;
+        }
     }
 
     if (list_sessions) {

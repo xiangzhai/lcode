@@ -12,6 +12,7 @@ A command-line coding agent written in C. It talks to DeepSeek's OpenAI-compatib
 - DeepSeek thinking mode: enabled by default, with a configurable `--reasoning-effort` level; the model's reasoning is printed in dim text as `[thinking]`
 - Streaming output: responses are streamed over Server-Sent Events, so thinking and text appear token by token as the model generates them (disable with `--no-stream`)
 - Token usage stats: after each request, prompt / completion / total and the cache hit rate are printed to stderr; use `/usage` for the running total
+- Context management: the conversation is compacted when the estimated prompt size exceeds a budget, so a long session never overruns the model's context window; the oldest messages are summarized by the model (or dropped) while the system prompt and the most recent exchanges are kept
 - Function calling loop: the model can call multiple tools in a row
 - Built-in tools:
   - `read_file` — read a text file
@@ -149,6 +150,13 @@ Command-line options (these override the corresponding environment variables):
                                    the default)
 --shell-timeout <seconds>          kill a run_shell command that runs longer than this
                                    (0 = no timeout, default: 120)
+--context-tokens <n>               compact the history once the estimated prompt size exceeds
+                                   n tokens (0 = disabled, default: 60000)
+--context-keep <n>                 keep at least the last n messages when compacting
+                                   (default: 8)
+--context-strategy <summarize|truncate>
+                                   how to shrink the history: ask the model to summarize the
+                                   dropped messages, or simply drop them (default: summarize)
 -h, --help                         show help
 -V, --version                      show version and exit
 ```
@@ -342,6 +350,36 @@ Once in the REPL, just type your request, for example:
 ```
 
 Press `Ctrl-D` to exit.
+
+## Context management
+
+A long session accumulates messages without bound, and eventually the prompt would exceed the
+model's context window. To prevent that, lcode estimates the size of the message history before
+every request and compacts it when it grows past a budget:
+
+- the system prompt is always kept;
+- at least the last `--context-keep <n>` messages (default `8`) are always kept;
+- older messages are removed, and the kept tail never starts in the middle of a tool call (a
+  `tool` result is never separated from the assistant call it answers);
+- with the default `--context-strategy summarize`, the messages about to be dropped are first sent
+  to the model in a small extra request and replaced by a single system message holding the
+  summary, so goals, decisions, touched files and open work are preserved. If that request fails
+  or you pass `--context-strategy truncate`, the messages are simply dropped instead.
+
+The budget is set with `--context-tokens <n>` (or `LCODE_CONTEXT_TOKENS`); `0` disables compaction.
+The estimate is a heuristic — ASCII text at roughly four characters per token, non-ASCII characters
+at roughly one token each — so leave some headroom below the real window size. The same value can
+be set with `LCODE_CONTEXT_TOKENS` / `LCODE_CONTEXT_KEEP` / `LCODE_CONTEXT_STRATEGY`.
+
+A compaction prints a dim notice, for example:
+
+```
+[context] prompt over 60000 tokens, summarizing older messages...
+[context] dropped 42 older messages, now ~12000 tokens
+```
+
+As with `run_shell`, the summarization request counts toward token usage and briefly invalidates the
+prompt cache prefix (the history it was built on has changed).
 
 ## Thinking mode
 

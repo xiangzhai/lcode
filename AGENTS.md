@@ -8,6 +8,7 @@ Update AGENTS.md to match the actual code.
 
 - `src/main.c` — entry point: environment and command-line argument parsing, `--list-*` modes, the directory-trust check, and `AGENTS.md` auto-loading
 - `src/agent.c` — system prompt and message construction, the REPL and tool-calling main loop, session commands (`/new`, `/switch`, ...), DeepSeek thinking mode, SSE delta reassembly, and token-usage accounting
+- `src/context.c` — context-window management: estimates the prompt token count and compacts the message history (model-generated summary of the dropped prefix, or plain truncation) when it exceeds the configured budget
 - `src/http.c` — libcurl-based HTTP POST with a spinner and ESC-interrupt polling, wraps `HttpResponse`; `http_post_json_stream()` additionally parses Server-Sent Events and dispatches each `data:` payload to a callback for live output
 - `src/tools.c` — tool schemas and implementations (`read_file` / `write_file` / `edit_file` / `list_dir` / `run_shell` / `ask_user` / `skill`) plus the interactive option menu; `run_shell` is gated by the shell command policy and confirms or refuses destructive commands
 - `src/policy.c` — shell command policy for `run_shell`: tokenises a command, classifies it as safe / risky / forbidden, and stores remembered approvals (per exact command or per kind of command) in `permissions.json`
@@ -17,7 +18,7 @@ Update AGENTS.md to match the actual code.
 - `src/trust.c` — directory trust model: canonicalisation, the trusted-directory list and its config file, active root
 - `src/interrupt.c` — ESC-based interrupt state and raw-terminal watch used while a request or command is in flight
 - `include/*.h` — corresponding module headers
-- `test/` — test code; `test_policy.c` covers the command classifier and is built by `-DLCODE_BUILD_TESTS=ON` (run with `ctest`); `t.c` is a placeholder
+- `test/` — test code; `test_policy.c` covers the command classifier and `test_context.c` covers context compaction, both built by `-DLCODE_BUILD_TESTS=ON` (run with `ctest`); `t.c` is a placeholder
 - `cmake/FindReadline.cmake` — module to locate readline
 - `CMakeLists.txt` — build configuration
 
@@ -36,6 +37,7 @@ Update AGENTS.md to match the actual code.
 - Tools are confined to trusted directories. `src/main.c` calls `ensure_trust()` at startup and refuses to run in an untrusted tree unless the user approves (or `--trust` is passed); `path_guard()` in `src/tools.c` re-checks every file tool, and `run_shell` refuses when no trusted root is active. Do not bypass these checks.
 - Directory trust decides *where* lcode may work; the shell command policy decides *what* a `run_shell` command may do. `policy_check()` classifies each command (see `src/policy.c`): forbidden commands are refused outright, risky ones are confirmed, and approvals can be remembered. Confirmed commands are refused in non-interactive mode unless a rule already allows them (or `--allow-dangerous` is passed).
 - Persistent state lives under `LCODE_HOME` when set, otherwise the XDG paths: sessions in `<data>/lcode/sessions`, skills in `<data>/lcode/skills`, trusted dirs in `<config>/lcode/trusted.json`, shell command permissions in `<config>/lcode/permissions.json`.
+- Before every request, `run_turn()` calls `context_maybe_compact()` (`src/context.c`): once the estimated prompt exceeds `--context-tokens` (default 60000, `0` disables), the message history is shrunk in place while keeping the system prompt and the last `--context-keep` messages and never splitting a `tool` result from its call. `--context-strategy summarize` (default) replaces the dropped prefix with a model-written summary, falling back to truncation on failure; the compacted array is what gets saved to the session.
 - Tools: `read_file`, `write_file`, `edit_file`, `list_dir`, `run_shell`, `ask_user`, and `skill`. `run_shell` streams output from a reader thread and kills the whole process group on interrupt.
 
 ## Code conventions

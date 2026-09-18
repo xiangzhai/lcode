@@ -12,6 +12,7 @@
 - DeepSeek 思考模式：默认开启，可通过 `--reasoning-effort` 配置强度；模型的思考内容会以暗淡文本前缀 `[thinking]` 打印
 - 流式输出：响应通过 Server-Sent Events 流式返回，思考与正文会随模型逐 token 生成而实时显示（可用 `--no-stream` 关闭）
 - Token 用量统计：每次请求后会把 prompt / completion / total 以及缓存命中率打印到 stderr；使用 `/usage` 查看累计值
+- 上下文管理：当估算的 prompt 体积超过预算时自动压缩历史，长会话不会撞上模型上下文上限；较早的消息由模型摘要（或直接丢弃），系统提示词与最近的若干轮对话始终保留
 - 函数调用循环：模型可以连续调用多个工具
 - 内置工具：
   - `read_file` — 读取文本文件
@@ -145,6 +146,12 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
                                    运行，直到模型不再调用工具（0 = 不限，默认值）
 --shell-timeout <seconds>          杀掉运行时间超过该秒数的 run_shell 命令
                                    （0 = 不限制，默认值：120）
+--context-tokens <n>               估算的 prompt 超过 n 个 token 时压缩历史
+                                   （0 = 关闭，默认值：60000）
+--context-keep <n>                 压缩时至少保留最近 n 条消息（默认值：8）
+--context-strategy <summarize|truncate>
+                                   压缩方式：让模型对将被丢弃的消息做摘要，或直接丢弃
+                                   （默认：summarize）
 -h, --help                         显示帮助
 -V, --version                      显示版本并退出
 ```
@@ -308,6 +315,34 @@ description: Fill in and validate PDF forms
 ```
 
 按 `Ctrl-D` 退出。
+
+## 上下文管理
+
+长会话的消息会不断累积，最终 prompt 会超过模型的上下文窗口。为此，lcode 在每次请求前估算
+消息历史的体积，一旦超过预算就地进行压缩：
+
+- 系统提示词始终保留；
+- 至少保留最近 `--context-keep <n>` 条消息（默认 `8`）；
+- 更早的消息会被移除，且保留的尾部绝不会从一次工具调用的中间开始（`tool` 结果不会与其对应的
+  assistant 调用被拆开）；
+- 默认的 `--context-strategy summarize` 会先把即将丢弃的消息通过一次额外的小请求发给模型，
+  再用一条包含摘要的 system 消息替换它们，从而保留目标、决策、涉及的文件与未完成的工作；
+  如果该请求失败，或传入 `--context-strategy truncate`，则直接丢弃这些消息。
+
+预算通过 `--context-tokens <n>`（或 `LCODE_CONTEXT_TOKENS`）设置，`0` 表示关闭压缩。该估算
+是启发式的——ASCII 文本约每 4 个字符 1 个 token，非 ASCII 字符约每个字符 1 个 token——因此请
+在真实窗口大小之下留出余量。对应环境变量为 `LCODE_CONTEXT_TOKENS` / `LCODE_CONTEXT_KEEP` /
+`LCODE_CONTEXT_STRATEGY`。
+
+压缩时会打印一条暗淡提示，例如：
+
+```
+[context] prompt over 60000 tokens, summarizing older messages...
+[context] dropped 42 older messages, now ~12000 tokens
+```
+
+与 `run_shell` 一样，摘要请求也会计入 token 用量，并会短暂使 prompt 缓存前缀失效（其依赖的历史
+已经改变）。
 
 ## 思考模式
 

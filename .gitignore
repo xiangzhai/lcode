@@ -1,6 +1,7 @@
 # Build output
 /build/
 build/
+build-tests/
 cmake-build-*/
 
 # CMake artifacts

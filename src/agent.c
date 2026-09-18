@@ -1,4 +1,5 @@
 #include "agent.h"
+#include "context.h"
 #include "http.h"
 #include "interrupt.h"
 #include "session.h"
@@ -221,6 +222,111 @@ static const char *json_string_at(json_object *obj, const char *key)
     if (json_object_get_type(v) != json_type_string)
         return NULL;
     return json_object_get_string(v);
+}
+
+/*
+ * Context compression. When the estimated prompt size exceeds the configured
+ * budget, run_turn() calls context_compact(); for the "summarize" strategy the
+ * dropped prefix is sent to the model in a separate, non-streaming request and
+ * the reply replaces it. On any failure NULL is returned and the caller falls
+ * back to plain truncation, so compaction never breaks a turn.
+ */
+typedef struct {
+    AgentConfig *cfg;
+    const char *url;
+} SummarizeCtx;
+
+static const char *SUMMARY_INSTRUCTION =
+    "You compress a coding-agent conversation so it fits a smaller context window. "
+    "The user message is a JSON array of chat messages that are about to be dropped "
+    "from the conversation. Write a concise summary that preserves everything needed "
+    "to continue the task: the user's goals and constraints, decisions already made, "
+    "files created or modified (with paths), important code facts, commands run with "
+    "their key results, errors and how they were handled, and any unfinished work or "
+    "next steps. Reply with the summary text only, without commentary or invented "
+    "details.";
+
+static char *summarize_prefix(json_object *dropped, void *userdata)
+{
+    SummarizeCtx *sc = userdata;
+    AgentConfig *cfg = sc->cfg;
+
+    json_object *req_messages = json_object_new_array();
+    json_object *sys = json_object_new_object();
+    json_object_object_add(sys, "role", json_object_new_string("system"));
+    json_object_object_add(sys, "content", json_object_new_string(SUMMARY_INSTRUCTION));
+    json_object_array_add(req_messages, sys);
+
+    json_object *um = json_object_new_object();
+    json_object_object_add(um, "role", json_object_new_string("user"));
+    json_object_object_add(um, "content",
+                           json_object_new_string(json_object_to_json_string_ext(
+                               dropped, JSON_C_TO_STRING_PLAIN)));
+    json_object_array_add(req_messages, um);
+
+    json_object *req = json_object_new_object();
+    json_object_object_add(req, "model", json_object_new_string(cfg->model));
+    json_object_object_add(req, "messages", req_messages);
+    json_object_object_add(req, "stream", json_object_new_boolean(0));
+    json_object *thinking = json_object_new_object();
+    json_object_object_add(thinking, "type", json_object_new_string("disabled"));
+    json_object_object_add(req, "thinking", thinking);
+    json_object_object_add(req, "temperature", json_object_new_double(0.2));
+
+    const char *body = json_object_to_json_string_ext(req, JSON_C_TO_STRING_PLAIN);
+    HttpResponse res = http_post_json(sc->url, cfg->api_key, body);
+    json_object_put(req);
+
+    char *summary = NULL;
+    if (!res.interrupted && !res.error &&
+        res.status >= 200 && res.status < 300 && res.body) {
+        json_object *root = json_tokener_parse(res.body);
+        if (root) {
+            json_object *choices;
+            if (json_object_object_get_ex(root, "choices", &choices) &&
+                json_object_get_type(choices) == json_type_array &&
+                json_object_array_length(choices) > 0) {
+                json_object *m;
+                if (json_object_object_get_ex(json_object_array_get_idx(choices, 0),
+                                              "message", &m)) {
+                    const char *content = json_string_at(m, "content");
+                    if (content && *content)
+                        summary = strdup(content);
+                }
+            }
+            json_object_put(root);
+        }
+    } else if (res.error) {
+        fprintf(stderr, "\033[1;33m[context]\033[0m summarization failed: %s\n", res.error);
+    }
+    http_response_free(&res);
+    return summary;
+}
+
+static void context_maybe_compact(AgentConfig *cfg, json_object *messages, const char *url)
+{
+    if (cfg->context_max_tokens <= 0)
+        return;
+    if (context_estimate_tokens(messages) <= cfg->context_max_tokens)
+        return;
+
+    ContextConfig cc;
+    cc.max_tokens = cfg->context_max_tokens;
+    cc.keep_recent = cfg->context_keep_recent;
+    cc.summarize = cfg->context_summarize;
+    SummarizeCtx sc = { cfg, url };
+
+    fprintf(stderr,
+            "\033[1;33m[context]\033[0m prompt over %ld tokens, %s older messages...\n",
+            cfg->context_max_tokens,
+            cfg->context_summarize ? "summarizing" : "truncating");
+
+    int dropped = context_compact(messages, &cc, summarize_prefix, &sc);
+    if (dropped > 0)
+        fprintf(stderr,
+                "\033[1;33m[context]\033[0m dropped %d older message%s, now ~%ld tokens\n",
+                dropped, dropped == 1 ? "" : "s",
+                context_estimate_tokens(messages));
 }
 
 static json_object *merge_loaded_messages(AgentConfig *cfg, json_object *loaded)
@@ -688,6 +794,8 @@ static int run_turn(AgentConfig *cfg, json_object *messages, const char *url,
         if (interrupt_pending())
             return TURN_INTERRUPTED;
 
+        context_maybe_compact(cfg, messages, url);
+
         json_object *req = build_request(cfg, messages);
         const char *body = json_object_to_json_string_ext(req, JSON_C_TO_STRING_PLAIN);
 
@@ -917,6 +1025,13 @@ int agent_run(AgentConfig *cfg)
         printf("thinking: enabled\n");
     else
         printf("thinking: disabled\n");
+    if (cfg->context_max_tokens > 0)
+        printf("context: compact at %ld tokens (%s, keep %d)\n",
+               cfg->context_max_tokens,
+               cfg->context_summarize ? "summarize" : "truncate",
+               cfg->context_keep_recent);
+    else
+        printf("context: compaction disabled\n");
     printf("session: %s%s\n", session_name, resumed ? " (resumed)" : "");
     printf("Type your request, Ctrl-D to exit. Press ESC to interrupt the model. "
            "/help for session commands.\n");
