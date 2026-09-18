@@ -8,6 +8,7 @@
  */
 
 const char *trust_config_path(void);
+const char *trust_config_dir(void);
 
 int trust_load(void);
 void trust_free(void);

@@ -1,5 +1,6 @@
 #include "agent.h"
 #include "http.h"
+#include "policy.h"
 #include "session.h"
 #include "skills.h"
 #include "tools.h"
@@ -95,6 +96,10 @@ static void usage(const char *prog)
             "  --list-skills               list available skills and exit\n"
             "  --trust                     trust the current directory without asking\n"
             "  --list-trusted              list trusted directories and exit\n"
+            "  --list-permissions          list remembered shell command permissions and exit\n"
+            "  --reset-permissions         forget all remembered shell command permissions\n"
+            "  --allow-dangerous           run shell commands without the dangerous-command\n"
+            "                              confirmation policy (this run only)\n"
             "  --non-interactive, -y       let the model decide; never ask, exit after --prompt\n"
             "  --stream                    stream the response over SSE (default)\n"
             "  --no-stream                 buffer the whole response before printing\n"
@@ -114,7 +119,10 @@ static void usage(const char *prog)
             "note: skills are discovered in .lcode/skills and $LCODE_HOME/skills\n"
             "note: lcode only accesses directories you have trusted; it asks per\n"
             "      directory (at startup and when a tool reaches outside) and saves\n"
-            "      the answer in the trust config file\n",
+            "      the answer in the trust config file\n"
+            "note: run_shell confirms potentially destructive commands before running\n"
+            "      them; refused ones are blocked outright, and approvals can be\n"
+            "      remembered per command or per kind of command\n",
             prog, SHELL_TIMEOUT_DEFAULT);
 }
 
@@ -212,6 +220,9 @@ int main(int argc, char **argv)
     int list_sessions = 0;
     int list_skills = 0;
     int list_trusted = 0;
+    int list_permissions = 0;
+    int reset_permissions = 0;
+    int allow_dangerous = 0;
     int force_trust = 0;
     int resume = 0;
 
@@ -258,6 +269,12 @@ int main(int argc, char **argv)
             force_trust = 1;
         } else if (strcmp(argv[i], "--list-trusted") == 0) {
             list_trusted = 1;
+        } else if (strcmp(argv[i], "--list-permissions") == 0) {
+            list_permissions = 1;
+        } else if (strcmp(argv[i], "--reset-permissions") == 0) {
+            reset_permissions = 1;
+        } else if (strcmp(argv[i], "--allow-dangerous") == 0) {
+            allow_dangerous = 1;
         } else if (strcmp(argv[i], "--non-interactive") == 0 || strcmp(argv[i], "-y") == 0) {
             cfg.non_interactive = 1;
         } else if (strcmp(argv[i], "--stream") == 0) {
@@ -326,6 +343,28 @@ int main(int argc, char **argv)
         return 0;
     }
 
+    if (list_permissions) {
+        policy_load();
+        policy_list();
+        policy_free();
+        for (int k = 0; k < owned_n; k++)
+            free(owned[k]);
+        return 0;
+    }
+
+    if (reset_permissions) {
+        policy_load();
+        if (policy_reset() != 0)
+            fprintf(stderr, "error: failed to clear %s\n", policy_config_path());
+        else
+            printf("cleared shell command permissions (config: %s)\n",
+                   policy_config_path());
+        policy_free();
+        for (int k = 0; k < owned_n; k++)
+            free(owned[k]);
+        return 0;
+    }
+
     if (cfg.session && !session_validate_name(cfg.session)) {
         fprintf(stderr, "error: invalid session name '%s'\n", cfg.session);
         for (int k = 0; k < owned_n; k++)
@@ -353,7 +392,11 @@ int main(int argc, char **argv)
     }
 
     trust_load();
+    policy_load();
+    if (allow_dangerous)
+        policy_set_allow_all(1);
     if (ensure_trust(cfg.non_interactive, force_trust) != 0) {
+        policy_free();
         trust_free();
         for (int k = 0; k < owned_n; k++)
             free(owned[k]);
@@ -364,6 +407,7 @@ int main(int argc, char **argv)
         access(APPEND_PROMPT_FILE, R_OK) == 0) {
         char *content = read_whole_file(APPEND_PROMPT_FILE, "append system prompt file");
         if (!content) {
+            policy_free();
             trust_free();
             for (int k = 0; k < owned_n; k++)
                 free(owned[k]);
@@ -377,6 +421,7 @@ int main(int argc, char **argv)
     int rc = agent_run(&cfg);
     http_global_cleanup();
     skills_free();
+    policy_free();
     trust_free();
 
     for (int k = 0; k < owned_n; k++)

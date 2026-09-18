@@ -1,5 +1,6 @@
 #include "tools.h"
 #include "interrupt.h"
+#include "policy.h"
 #include "skills.h"
 #include "strbuf.h"
 #include "trust.h"
@@ -585,6 +586,81 @@ int tools_output_streamed(void)
     return g_last_output_streamed;
 }
 
+/*
+ * Gate a shell command through the command policy before it runs. Directory
+ * trust decides where lcode may work; this decides what a command may do.
+ * Forbidden commands are refused outright; risky ones are confirmed with a
+ * menu that can remember the decision. Returns NULL when the command may run,
+ * otherwise an error string for the model.
+ */
+static char *shell_policy_guard(const char *command)
+{
+    const char *category = NULL;
+    int cls = policy_check(command, &category);
+    if (cls == POLICY_ALLOW)
+        return NULL;
+
+    const char *desc = policy_category_desc(category);
+    if (!desc)
+        desc = "a potentially destructive operation";
+
+    if (cls == POLICY_DENY) {
+        char *msg = NULL;
+        if (asprintf(&msg,
+                     "error: refused to run a command that may %s; it is blocked by "
+                     "the shell command policy, choose a safer alternative", desc) < 0)
+            return xstrdup("error: command blocked by the shell command policy");
+        return msg;
+    }
+
+    if (g_non_interactive || !isatty(STDIN_FILENO)) {
+        char *msg = NULL;
+        if (asprintf(&msg,
+                     "error: this command may %s, so it needs the user's confirmation, "
+                     "but lcode is not attached to a terminal; run it yourself, approve "
+                     "a permission rule interactively, or start lcode with "
+                     "--allow-dangerous", desc) < 0)
+            return xstrdup("error: command needs confirmation");
+        return msg;
+    }
+
+    printf("\n\033[1;33m[tool] run_shell needs confirmation\033[0m\n"
+           "\033[0;90m  command: %s\033[0m\n"
+           "\033[0;90m  concern: may %s\033[0m\n",
+           command, desc);
+
+    char *o1 = NULL, *o2 = NULL, *o3 = NULL, *o4 = NULL;
+    int built = asprintf(&o1, "Yes, run it once") >= 0 &&
+                asprintf(&o2, "Yes, and always allow this exact command") >= 0 &&
+                asprintf(&o3, "Yes, and always allow this kind of command") >= 0 &&
+                asprintf(&o4, "No, do not run it") >= 0;
+
+    int choice = -1;
+    if (built) {
+        char *opts[4] = {o1, o2, o3, o4};
+        choice = ui_choose("Run this shell command?", opts, 4);
+    }
+    free(o1);
+    free(o2);
+    free(o3);
+    free(o4);
+
+    if (choice == 0)
+        return NULL;
+    if (choice == 1) {
+        if (policy_remember_command(command) != 0)
+            fprintf(stderr, "warning: could not save the permission rule\n");
+        return NULL;
+    }
+    if (choice == 2) {
+        if (policy_remember_category(category) != 0)
+            fprintf(stderr, "warning: could not save the permission rule\n");
+        return NULL;
+    }
+
+    return xstrdup("error: the user declined to run this command");
+}
+
 static char *tool_run_shell(json_object *args)
 {
     const char *command = arg_str(args, "command");
@@ -593,6 +669,10 @@ static char *tool_run_shell(json_object *args)
 
     if (!trust_active_root())
         return xstrdup("error: no trusted directory is active; refusing to run commands");
+
+    char *policy_msg = shell_policy_guard(command);
+    if (policy_msg)
+        return policy_msg;
 
     /* A per-call timeout overrides the configured default; 0 disables it. */
     int timeout_secs = g_shell_timeout;
@@ -1145,7 +1225,11 @@ json_object *tools_schema(void)
     json_object_array_add(tools, make_tool(
         "run_shell",
         "Run a shell command and return its combined output and exit status. If it runs "
-        "longer than the timeout it is killed and the output is reported as timed out.",
+        "longer than the timeout it is killed and the output is reported as timed out. "
+        "Potentially destructive commands (for example recursive deletes, piping a "
+        "download into a shell, or writing outside the trusted directories) require the "
+        "user's confirmation and may be refused; if a command is refused, do not retry it "
+        "unchanged.",
         p4, required1("command")));
 
     json_object *p5 = json_object_new_object();

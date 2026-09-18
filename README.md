@@ -27,6 +27,7 @@ A command-line coding agent written in C. It talks to DeepSeek's OpenAI-compatib
     - With `--non-interactive` (or `-y`) no menu is shown; the decision is handed back to the model, which picks for itself and completes the task silently
 - Skills: automatically discover skills (`SKILL.md`) from convention directories, list them in the system prompt, and let the model load a skill's full instructions on demand through the `skill` tool
 - Directory trust: before touching a new directory lcode asks whether you trust it and remembers the answer; a tool that reaches outside the trusted directories asks the same way, and directories you have not trusted are never accessed
+- Shell command policy: on top of directory trust, `run_shell` classifies each command and confirms destructive ones (recursive deletes, piping a download into a shell, writes outside the trusted directories, ...) before running, refuses the most dangerous ones outright, and remembers approvals per command or per kind of command
 
 ## Dependencies
 
@@ -131,6 +132,10 @@ Command-line options (these override the corresponding environment variables):
 --list-skills                      list discovered skills and exit
 --trust                            trust the current directory without asking and save it
 --list-trusted                     list trusted directories and exit
+--list-permissions                 list remembered shell command permissions and exit
+--reset-permissions                forget all remembered shell command permissions
+--allow-dangerous                  run shell commands without the dangerous-command
+                                   confirmation policy (this run only)
 --non-interactive, -y              non-interactive mode: let the model decide, never ask the user;
                                    if --prompt/--prompt-file is also given, exit once it finishes
 --stream                           stream the response over SSE (default)
@@ -189,8 +194,10 @@ of its parents is trusted, so trusting a project root covers its subdirectories.
 
 The file tools (`read_file`, `write_file`, `edit_file`, `list_dir`) refuse any path that resolves (through `..`
 or symlinks) outside every trusted directory, and `run_shell` refuses to run when no trusted
-directory is active. Because a shell command can still reach elsewhere on its own, trust a
-directory only when you are comfortable with lcode running arbitrary commands in it.
+directory is active. A shell command can still reach elsewhere on its own, so trust a
+directory only when you are comfortable with lcode running commands in it; the
+[shell command policy](#shell-command-policy) adds a second layer that confirms destructive
+commands and keeps writes outside the trusted directories in check.
 
 A tool that reaches outside the trusted directories is offered to you before it is refused, using
 the same menu as the `ask_user` tool:
@@ -211,6 +218,45 @@ Trusted directories are stored in `$LCODE_HOME/trusted.json` when `LCODE_HOME` i
 `$XDG_CONFIG_HOME/lcode/trusted.json`, otherwise `~/.config/lcode/trusted.json`. Use
 `--list-trusted` to inspect them. In non-interactive mode (`--non-interactive`) lcode never
 prompts; pass `--trust` to trust the current directory up front.
+
+## Shell command policy
+
+Directory trust decides *where* lcode may work, but a trusted directory does not make every command
+safe, so `run_shell` runs each command through a policy before executing it. Commands are
+classified three ways:
+
+- **safe** — ordinary commands (`ls`, `make`, `git status`, ...) run without asking;
+- **risky** — commands that can lose data or escape the trusted tree are confirmed first, for
+  example recursive deletes (`rm -rf build`), piping a download into a shell (`curl ... | sh`),
+  `sudo`, force pushes (`git push --force`), `git reset --hard`, `git clean -fd`, recursive
+  `chmod`/`chown`, `eval`, `dd`/`shred`, `find -delete`, and redirects or `dd` writes to a path
+  outside the trusted directories;
+- **forbidden** — a small set of commands that are refused outright, whatever you answer: erasing
+  the filesystem root or a critical system path, formatting a disk, writing to a raw block device,
+  overwriting a system file, shutting the machine down, and fork bombs.
+
+A risky command is confirmed with a menu:
+
+```
+? Run this shell command?
+  1) Yes, run it once
+  2) Yes, and always allow this exact command
+  3) Yes, and always allow this kind of command
+  4) No, do not run it
+```
+
+Choosing "once" runs just this command; the "always allow" options remember a rule so lcode stops
+asking — either for the exact command or for its whole kind (for example, all recursive deletes)
+— which refines the coarse directory-level trust down to the level of individual commands. Choosing
+"No" returns a refusal to the model, which is told not to retry the command unchanged.
+
+Remembered rules are stored in `permissions.json` next to the trust config (under `$LCODE_HOME`, or
+`$XDG_CONFIG_HOME/lcode`, or `~/.config/lcode`). Inspect them with `--list-permissions` and forget
+them all with `--reset-permissions`.
+
+In non-interactive mode (`--non-interactive`) there is no one to confirm, so risky commands are
+refused; pass `--allow-dangerous` to run commands without the confirmation policy for that run.
+Use it only when you fully trust the model and the task.
 
 ## Session management
 

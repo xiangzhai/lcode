@@ -15,28 +15,46 @@ static char **g_trusted = NULL;
 static int g_trusted_count = 0;
 static char *g_active_root = NULL;
 
-const char *trust_config_path(void)
+/* Directory holding lcode's trust config; other policy files live here too. */
+const char *trust_config_dir(void)
 {
-    static char path[4096];
+    static char dir[4096];
     static int ready = 0;
     if (ready)
-        return path;
+        return dir;
 
     const char *override = getenv("LCODE_HOME");
     if (override && *override) {
-        snprintf(path, sizeof(path), "%s/trusted.json", override);
+        snprintf(dir, sizeof(dir), "%s", override);
     } else {
         const char *cfg = getenv("XDG_CONFIG_HOME");
         if (cfg && *cfg) {
-            snprintf(path, sizeof(path), "%s/lcode/trusted.json", cfg);
+            snprintf(dir, sizeof(dir), "%s/lcode", cfg);
         } else {
             const char *home = getenv("HOME");
             if (!home || !*home)
                 home = ".";
-            snprintf(path, sizeof(path), "%s/.config/lcode/trusted.json", home);
+            snprintf(dir, sizeof(dir), "%s/.config/lcode", home);
         }
     }
     ready = 1;
+    return dir;
+}
+
+const char *trust_config_path(void)
+{
+    static char path[4096];
+    static int ready = 0;
+    if (!ready) {
+        const char *dir = trust_config_dir();
+        const char *suffix = "/trusted.json";
+        size_t n = strlen(dir);
+        if (n > sizeof(path) - strlen(suffix) - 1)
+            n = sizeof(path) - strlen(suffix) - 1;
+        memcpy(path, dir, n);
+        strcpy(path + n, suffix);
+        ready = 1;
+    }
     return path;
 }
 

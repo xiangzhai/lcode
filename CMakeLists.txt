@@ -25,6 +25,7 @@ add_executable(lcode
   src/tools.c
   src/session.c
   src/skills.c
+  src/policy.c
   src/strbuf.c
   src/trust.c
   src/interrupt.c
@@ -39,3 +40,22 @@ target_link_libraries(lcode PRIVATE
   Threads::Threads
   ${READLINE_LIBRARY}
 )
+
+option(LCODE_BUILD_TESTS "Build lcode unit tests" OFF)
+
+if(LCODE_BUILD_TESTS)
+  enable_testing()
+
+  add_executable(test_policy
+    test/test_policy.c
+    src/policy.c
+    src/trust.c
+    src/strbuf.c
+  )
+  target_include_directories(test_policy PRIVATE include)
+  target_compile_definitions(test_policy PRIVATE _GNU_SOURCE)
+  target_compile_options(test_policy PRIVATE -Wall -Wextra -Wno-unused-parameter)
+  target_link_libraries(test_policy PRIVATE PkgConfig::JSONC)
+
+  add_test(NAME policy COMMAND test_policy)
+endif()

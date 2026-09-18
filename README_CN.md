@@ -25,6 +25,7 @@
     - 使用 `--non-interactive`（或 `-y`）时不显示菜单；决策交还给模型，由模型自行选择并静默完成任务
 - 技能（Skills）：自动从约定目录中发现技能（`SKILL.md`），在系统提示中列出，并让模型按需通过 `skill` 工具加载技能的完整指令
 - 目录信任：lcode 在访问新目录前会先询问你是否信任，并记住你的选择；当工具访问到信任目录之外时会以同样的方式询问，未经信任的目录绝不会被访问
+- Shell 命令策略：在目录信任之上，`run_shell` 会对每条命令分类，危险命令（递归删除、把下载内容管道给 shell、写出信任目录之外等）在执行前先确认，最危险的一类直接拒绝，并可按单条命令或某一类命令记住你的许可
 
 ## 依赖
 
@@ -129,6 +130,9 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
 --list-skills                      列出已发现的技能并退出
 --trust                            信任当前目录（不再询问）并保存
 --list-trusted                     列出已信任的目录并退出
+--list-permissions                 列出已记住的 shell 命令许可并退出
+--reset-permissions                清空所有已记住的 shell 命令许可
+--allow-dangerous                  本次运行跳过危险命令确认策略
 --non-interactive, -y              非交互模式：让模型自行决策、绝不询问用户；
                                    若同时给出 --prompt/--prompt-file，完成后即退出
 --stream                           通过 SSE 流式输出响应（默认）
@@ -179,7 +183,7 @@ Trust this directory and its contents? [y/N]
 
 回答 yes 会把该目录记录到信任配置文件并允许 lcode 运行；回答 no 会中止运行，因此该目录绝不会被触碰。若某个父目录已被信任，其子目录也视为已信任，因此信任项目根目录即可覆盖其所有子目录。
 
-文件工具（`read_file`、`write_file`、`edit_file`、`list_dir`）会拒绝任何经 `..` 或符号链接解析后落到所有信任目录之外的路径；当没有生效的信任目录时，`run_shell` 拒绝运行。由于 shell 命令本身仍可能访问其他地方，请仅在你愿意让 lcode 在其中运行任意命令时才信任该目录。
+文件工具（`read_file`、`write_file`、`edit_file`、`list_dir`）会拒绝任何经 `..` 或符号链接解析后落到所有信任目录之外的路径；当没有生效的信任目录时，`run_shell` 拒绝运行。shell 命令本身仍可能访问其他地方，因此请仅在你愿意让 lcode 在其中运行命令时才信任该目录；[Shell 命令策略](#shell-命令策略) 会再加一层防护，对危险命令进行确认，并约束写出信任目录之外的操作。
 
 当某个工具访问到信任目录之外时，lcode 会先用与 `ask_user` 相同的菜单询问是否信任该目录，而不是直接拒绝：
 
@@ -193,6 +197,40 @@ Trust this directory and its contents? [y/N]
 
 已信任目录保存在 `$LCODE_HOME/trusted.json`（设置了 `LCODE_HOME` 时），否则保存在
 `$XDG_CONFIG_HOME/lcode/trusted.json`，否则保存在 `~/.config/lcode/trusted.json`。可用 `--list-trusted` 查看。在非交互模式（`--non-interactive`）下 lcode 绝不询问；请用 `--trust` 预先信任当前目录。
+
+## Shell 命令策略
+
+目录信任决定 lcode *在哪里*工作，但信任一个目录并不意味着其中的每条命令都安全，因此 `run_shell`
+在执行前会让每条命令经过一层策略检查。命令分为三类：
+
+- **安全** —— 普通命令（`ls`、`make`、`git status` 等）直接运行，不再询问；
+- **危险** —— 可能造成数据丢失或越出信任目录的命令，会先确认，例如递归删除（`rm -rf build`）、
+  把下载内容管道给 shell（`curl ... | sh`）、`sudo`、强制推送（`git push --force`）、
+  `git reset --hard`、`git clean -fd`、递归 `chmod`/`chown`、`eval`、`dd`/`shred`、`find -delete`，
+  以及重定向或 `dd` 写到信任目录之外的路径；
+- **禁止** —— 一小类无论你如何回答都会被直接拒绝的命令：删除文件系统根目录或关键系统路径、
+  格式化磁盘、写入裸块设备、覆盖系统文件、关机，以及 fork 炸弹。
+
+危险命令会以菜单确认：
+
+```
+? Run this shell command?
+  1) Yes, run it once
+  2) Yes, and always allow this exact command
+  3) Yes, and always allow this kind of command
+  4) No, do not run it
+```
+
+选择“仅本次”只运行这一条命令；两个“始终允许”选项会记住一条规则，让 lcode 不再询问——要么针对
+这条确切的命令，要么针对它所属的一整类（例如所有递归删除）——从而把粗粒度的目录级信任细化到单条
+命令的粒度。选择“否”会把拒绝结果返回给模型，并提示它不要原样重试。
+
+已记住的规则保存在信任配置同目录下的 `permissions.json`（位于 `$LCODE_HOME`，或
+`$XDG_CONFIG_HOME/lcode`，或 `~/.config/lcode`）。可用 `--list-permissions` 查看，用
+`--reset-permissions` 全部清空。
+
+在非交互模式（`--non-interactive`）下无人可以确认，危险命令会被拒绝；传入 `--allow-dangerous`
+可在本次运行中跳过确认策略——仅在你完全信任模型与任务时使用。
 
 ## 会话管理
 
