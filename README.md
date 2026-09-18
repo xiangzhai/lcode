@@ -15,6 +15,9 @@ A command-line coding agent written in C. It talks to DeepSeek's OpenAI-compatib
 - Built-in tools:
   - `read_file` — read a text file
   - `write_file` — write (overwrite) a text file
+  - `edit_file` — replace an exact string in a text file; by default `old_string`
+    must match exactly once (pass `replace_all` to change every occurrence). Prefer this
+    over `write_file` when changing part of an existing file
   - `list_dir` — list directory entries (type and size)
   - `run_shell` — run a shell command and return its output and exit code
   - `ask_user` — show an interactive menu when the user must choose among several options (arrow/number keys to select, `Enter` to confirm, `q`/`Esc` to cancel; falls back to numbered input when not attached to a TTY)
@@ -176,7 +179,7 @@ Answering yes records the directory in the trust config file and lets lcode run;
 aborts the run so the directory is never touched. A directory is also considered trusted when one
 of its parents is trusted, so trusting a project root covers its subdirectories.
 
-The file tools (`read_file`, `write_file`, `list_dir`) refuse any path that resolves (through `..`
+The file tools (`read_file`, `write_file`, `edit_file`, `list_dir`) refuse any path that resolves (through `..`
 or symlinks) outside every trusted directory, and `run_shell` refuses to run when no trusted
 directory is active. Because a shell command can still reach elsewhere on its own, trust a
 directory only when you are comfortable with lcode running arbitrary commands in it.

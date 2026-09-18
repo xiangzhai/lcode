@@ -72,6 +72,30 @@ static void print_tool_call(const char *name, const char *args_str, json_object 
         return;
     }
 
+    if (name && strcmp(name, "edit_file") == 0 && args &&
+        json_object_get_type(args) == json_type_object) {
+        json_object *v;
+        const char *path = NULL;
+        size_t old_bytes = 0, new_bytes = 0;
+        int replace_all = 0;
+        if (json_object_object_get_ex(args, "path", &v) &&
+            json_object_get_type(v) == json_type_string)
+            path = json_object_get_string(v);
+        if (json_object_object_get_ex(args, "old_string", &v) &&
+            json_object_get_type(v) == json_type_string)
+            old_bytes = strlen(json_object_get_string(v));
+        if (json_object_object_get_ex(args, "new_string", &v) &&
+            json_object_get_type(v) == json_type_string)
+            new_bytes = strlen(json_object_get_string(v));
+        if (json_object_object_get_ex(args, "replace_all", &v) &&
+            json_object_get_type(v) == json_type_boolean)
+            replace_all = json_object_get_boolean(v);
+        printf("\n\033[1;33m[tool] edit_file %s (%zu -> %zu bytes%s)\033[0m\n",
+               path ? path : "(unknown)", old_bytes, new_bytes,
+               replace_all ? ", all" : "");
+        return;
+    }
+
     printf("\n\033[1;33m[tool] %s %s\033[0m\n", name ? name : "(unknown)", args_str);
 }
 

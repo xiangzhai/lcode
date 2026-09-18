@@ -22,6 +22,7 @@
 
 #define MAX_TOOL_OUTPUT (256 * 1024)
 #define MAX_READ_SIZE (512 * 1024)
+#define MAX_EDIT_SIZE (16 * 1024 * 1024)
 #define DISPLAY_MAX_LINES 10
 
 static int g_non_interactive = 0;
@@ -282,6 +283,193 @@ static char *tool_write_file(json_object *args)
     }
     if (asprintf(&msg, "wrote %zu bytes to %s", n, path) < 0)
         return xstrdup("wrote file");
+    return msg;
+}
+
+/*
+ * Read a whole file for editing. read_stream() caps its result, which is fine
+ * for read_file but not here: rewriting a truncated buffer would silently drop
+ * the tail of the file. Files larger than MAX_EDIT_SIZE are refused on purpose.
+ */
+static char *read_file_all(const char *path, int *err_out)
+{
+    *err_out = 0;
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        *err_out = errno;
+        return NULL;
+    }
+
+    struct stat st;
+    if (fstat(fileno(f), &st) == 0 && S_ISREG(st.st_mode) &&
+        st.st_size > MAX_EDIT_SIZE) {
+        *err_out = EFBIG;
+        fclose(f);
+        return NULL;
+    }
+
+    size_t cap = 8192, len = 0;
+    char *buf = malloc(cap);
+    if (!buf) {
+        *err_out = ENOMEM;
+        fclose(f);
+        return NULL;
+    }
+
+    size_t n;
+    while ((n = fread(buf + len, 1, cap - len - 1, f)) > 0) {
+        len += n;
+        if (len + 1 >= cap) {
+            if (cap >= MAX_EDIT_SIZE) {
+                free(buf);
+                fclose(f);
+                *err_out = EFBIG;
+                return NULL;
+            }
+            size_t ncap = cap * 2;
+            char *tmp = realloc(buf, ncap);
+            if (!tmp) {
+                free(buf);
+                fclose(f);
+                *err_out = ENOMEM;
+                return NULL;
+            }
+            buf = tmp;
+            cap = ncap;
+        }
+    }
+
+    if (ferror(f)) {
+        free(buf);
+        fclose(f);
+        *err_out = EIO;
+        return NULL;
+    }
+
+    fclose(f);
+    buf[len] = '\0';
+    return buf;
+}
+
+/*
+ * Replace an exact string in a file. A single unambiguous match is required
+ * unless replace_all is set, so a wrong edit fails loudly instead of silently
+ * changing an unintended occurrence. Prefer this over write_file for changing
+ * part of an existing file.
+ */
+static char *tool_edit_file(json_object *args)
+{
+    const char *path = arg_str(args, "path");
+    const char *old_str = arg_str(args, "old_string");
+    const char *new_str = arg_str(args, "new_string");
+
+    if (!path)
+        return xstrdup("error: missing required argument 'path'");
+    if (!old_str)
+        return xstrdup("error: missing required argument 'old_string'");
+    if (!new_str)
+        return xstrdup("error: missing required argument 'new_string'");
+    if (!*old_str)
+        return xstrdup("error: 'old_string' must not be empty");
+    if (strcmp(old_str, new_str) == 0)
+        return xstrdup("error: 'old_string' and 'new_string' are identical");
+
+    int replace_all = 0;
+    json_object *v;
+    if (args && json_object_object_get_ex(args, "replace_all", &v) &&
+        json_object_get_type(v) == json_type_boolean)
+        replace_all = json_object_get_boolean(v);
+
+    char *guard = path_guard(path);
+    if (guard)
+        return guard;
+
+    int err = 0;
+    char *content = read_file_all(path, &err);
+    if (!content) {
+        char *msg = NULL;
+        if (asprintf(&msg, "error: cannot read '%s' for editing: %s",
+                     path, strerror(err)) < 0)
+            return xstrdup("error: cannot read file for editing");
+        return msg;
+    }
+
+    size_t old_len = strlen(old_str);
+    size_t new_len = strlen(new_str);
+
+    int count = 0;
+    for (const char *p = content; (p = strstr(p, old_str)) != NULL; p += old_len)
+        count++;
+
+    if (count == 0) {
+        free(content);
+        char *msg = NULL;
+        if (asprintf(&msg, "error: 'old_string' not found in '%s'", path) < 0)
+            return xstrdup("error: 'old_string' not found");
+        return msg;
+    }
+    if (count > 1 && !replace_all) {
+        free(content);
+        char *msg = NULL;
+        if (asprintf(&msg,
+                     "error: 'old_string' matches %d times in '%s'; add more "
+                     "surrounding context to make it unique, or set replace_all=true",
+                     count, path) < 0)
+            return xstrdup("error: 'old_string' is not unique");
+        return msg;
+    }
+
+    StrBuf out;
+    if (sb_init(&out, strlen(content) + 64) != 0) {
+        free(content);
+        return xstrdup("error: out of memory");
+    }
+
+    int replacements = 0;
+    const char *cur = content;
+    for (;;) {
+        const char *hit = strstr(cur, old_str);
+        if (!hit) {
+            sb_add(&out, cur);
+            break;
+        }
+        sb_addn(&out, cur, (size_t)(hit - cur));
+        sb_addn(&out, new_str, new_len);
+        replacements++;
+        cur = hit + old_len;
+        if (!replace_all) {
+            sb_add(&out, cur);
+            break;
+        }
+    }
+    free(content);
+
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        free(out.buf);
+        char *msg = NULL;
+        if (asprintf(&msg, "error: cannot open '%s' for writing: %s",
+                     path, strerror(errno)) < 0)
+            return xstrdup("error: cannot open file for writing");
+        return msg;
+    }
+
+    size_t written = fwrite(out.buf, 1, out.len, f);
+    int failed = ferror(f);
+    fclose(f);
+    free(out.buf);
+
+    if (failed || written != out.len) {
+        char *msg = NULL;
+        if (asprintf(&msg, "error: failed writing to '%s'", path) < 0)
+            return xstrdup("error: write failed");
+        return msg;
+    }
+
+    char *msg = NULL;
+    if (asprintf(&msg, "edited %s: replaced %d occurrence%s",
+                 path, replacements, replacements == 1 ? "" : "s") < 0)
+        return xstrdup("edited file");
     return msg;
 }
 
@@ -892,6 +1080,8 @@ char *tools_execute(const char *name, json_object *args)
         return tool_ask_user(args);
     if (strcmp(name, "write_file") == 0)
         return tool_write_file(args);
+    if (strcmp(name, "edit_file") == 0)
+        return tool_edit_file(args);
     if (strcmp(name, "list_dir") == 0)
         return tool_list_dir(args);
     if (strcmp(name, "run_shell") == 0)
@@ -962,6 +1152,26 @@ json_object *tools_schema(void)
         "write_file",
         "Write (overwrite) a text file with the given content.",
         p2, r2));
+
+    json_object *p2e = json_object_new_object();
+    json_object_object_add(p2e, "path", prop("string", "Path to the file to edit"));
+    json_object_object_add(p2e, "old_string",
+                           prop("string", "Exact text to replace; must occur in the file"));
+    json_object_object_add(p2e, "new_string",
+                           prop("string", "Replacement text (may be empty to delete)"));
+    json_object_object_add(p2e, "replace_all",
+                           prop("boolean", "Replace every occurrence instead of requiring "
+                                           "a unique match (default: false)"));
+    json_object *r2e = json_object_new_array();
+    json_object_array_add(r2e, json_object_new_string("path"));
+    json_object_array_add(r2e, json_object_new_string("old_string"));
+    json_object_array_add(r2e, json_object_new_string("new_string"));
+    json_object_array_add(tools, make_tool(
+        "edit_file",
+        "Replace an exact string in a text file. By default 'old_string' must occur "
+        "exactly once; set replace_all to replace every occurrence. Prefer this over "
+        "write_file when changing part of an existing file.",
+        p2e, r2e));
 
     json_object *p3 = json_object_new_object();
     json_object_object_add(p3, "path", prop("string", "Directory path, defaults to current directory"));

@@ -9,7 +9,7 @@ Update AGENTS.md to match the actual code.
 - `src/main.c` — entry point: environment and command-line argument parsing, `--list-*` modes, the directory-trust check, and `AGENTS.md` auto-loading
 - `src/agent.c` — system prompt and message construction, the REPL and tool-calling main loop, session commands (`/new`, `/switch`, ...), DeepSeek thinking mode, and token-usage accounting
 - `src/http.c` — libcurl-based HTTP POST with a spinner and ESC-interrupt polling, wraps `HttpResponse`
-- `src/tools.c` — tool schemas and implementations (`read_file` / `write_file` / `list_dir` / `run_shell` / `ask_user` / `skill`) plus the interactive option menu
+- `src/tools.c` — tool schemas and implementations (`read_file` / `write_file` / `edit_file` / `list_dir` / `run_shell` / `ask_user` / `skill`) plus the interactive option menu
 - `src/skills.c` — skill discovery and loading (`.lcode/skills` and the global skills directory, `SKILL.md` frontmatter)
 - `src/session.c` — session persistence: JSON store under the sessions directory, list/load/save/delete, most-recent lookup
 - `src/trust.c` — directory trust model: canonicalisation, the trusted-directory list and its config file, active root
@@ -32,7 +32,7 @@ Update AGENTS.md to match the actual code.
 
 - Tools are confined to trusted directories. `src/main.c` calls `ensure_trust()` at startup and refuses to run in an untrusted tree unless the user approves (or `--trust` is passed); `path_guard()` in `src/tools.c` re-checks every file tool, and `run_shell` refuses when no trusted root is active. Do not bypass these checks.
 - Persistent state lives under `LCODE_HOME` when set, otherwise the XDG paths: sessions in `<data>/lcode/sessions`, skills in `<data>/lcode/skills`, trusted dirs in `<config>/lcode/trusted.json`.
-- Tools: `read_file`, `write_file`, `list_dir`, `run_shell`, `ask_user`, and `skill`. `run_shell` streams output from a reader thread and kills the whole process group on interrupt.
+- Tools: `read_file`, `write_file`, `edit_file`, `list_dir`, `run_shell`, `ask_user`, and `skill`. `run_shell` streams output from a reader thread and kills the whole process group on interrupt.
 
 ## Code conventions
 
