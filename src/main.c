@@ -2,6 +2,7 @@
 #include "http.h"
 #include "session.h"
 #include "skills.h"
+#include "tools.h"
 #include "trust.h"
 #include "version.h"
 
@@ -103,16 +104,18 @@ static void usage(const char *prog)
             "                              (default: high)\n"
             "  --max-iterations <n>        print a notice every n tool-call rounds; the turn\n"
             "                              runs until the model stops (0 = unlimited, default)\n"
+            "  --shell-timeout <seconds>   kill a run_shell command that runs longer than this\n"
+            "                              (0 = no timeout, default: %d)\n"
             "  -h, --help                  show this help\n"
             "  -V, --version               show version and exit\n"
             "env: DEEPSEEK_API_KEY (required), DEEPSEEK_BASE_URL, DEEPSEEK_MODEL,\n"
-            "     DEEPSEEK_THINKING, DEEPSEEK_REASONING_EFFORT, LCODE_HOME\n"
+            "     DEEPSEEK_THINKING, DEEPSEEK_REASONING_EFFORT, LCODE_HOME, LCODE_SHELL_TIMEOUT\n"
             "note: AGENTS.md in the current directory is auto-appended to the system prompt\n"
             "note: skills are discovered in .lcode/skills and $LCODE_HOME/skills\n"
             "note: lcode only accesses directories you have trusted; it asks per\n"
             "      directory (at startup and when a tool reaches outside) and saves\n"
             "      the answer in the trust config file\n",
-            prog);
+            prog, SHELL_TIMEOUT_DEFAULT);
 }
 
 /*
@@ -186,6 +189,13 @@ int main(int argc, char **argv)
     cfg.session = NULL;
     cfg.non_interactive = 0;
     cfg.max_iterations = DEFAULT_MAX_ITERATIONS;
+    cfg.shell_timeout = SHELL_TIMEOUT_DEFAULT;
+    const char *timeout_env = getenv("LCODE_SHELL_TIMEOUT");
+    if (timeout_env && *timeout_env) {
+        cfg.shell_timeout = atoi(timeout_env);
+        if (cfg.shell_timeout < 0)
+            cfg.shell_timeout = 0;
+    }
     cfg.stream = 1;
     cfg.thinking = 1;
     cfg.reasoning_effort = env_or("DEEPSEEK_REASONING_EFFORT", "high");
@@ -264,6 +274,10 @@ int main(int argc, char **argv)
             cfg.max_iterations = atoi(argv[++i]);
             if (cfg.max_iterations < 0)
                 cfg.max_iterations = DEFAULT_MAX_ITERATIONS;
+        } else if (strcmp(argv[i], "--shell-timeout") == 0 && i + 1 < argc) {
+            cfg.shell_timeout = atoi(argv[++i]);
+            if (cfg.shell_timeout < 0)
+                cfg.shell_timeout = 0;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             usage(argv[0]);
             return 0;

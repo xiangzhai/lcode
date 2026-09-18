@@ -875,6 +875,7 @@ int agent_run(AgentConfig *cfg)
     snprintf(url, sizeof(url), "%s/chat/completions", cfg->base_url);
 
     tools_set_non_interactive(cfg->non_interactive);
+    tools_set_shell_timeout(cfg->shell_timeout);
     skills_reload();
 
     char *session_name = NULL;

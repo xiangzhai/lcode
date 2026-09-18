@@ -19,7 +19,8 @@
   - `edit_file` — 精确替换文本文件中的字符串；默认要求 `old_string`
     只匹配一处（传 `replace_all` 可替换全部）。修改现有文件的局部时优先用它而不是 `write_file`
   - `list_dir` — 列出目录条目（类型与大小）
-  - `run_shell` — 运行 shell 命令并返回输出与退出码
+  - `run_shell` — 运行 shell 命令并返回输出与退出码；可选参数 `timeout`（秒）在命令
+    运行过久时杀掉其进程组，否则套用 `--shell-timeout` / `LCODE_SHELL_TIMEOUT` 的默认值
   - `ask_user` — 当用户需要在多个选项中做出选择时显示交互式菜单（用方向键/数字键选择，`Enter` 确认，`q`/`Esc` 取消；在非 TTY 环境下回退为数字输入）
     - 使用 `--non-interactive`（或 `-y`）时不显示菜单；决策交还给模型，由模型自行选择并静默完成任务
 - 技能（Skills）：自动从约定目录中发现技能（`SKILL.md`），在系统提示中列出，并让模型按需通过 `skill` 工具加载技能的完整指令
@@ -102,6 +103,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
 | `DEEPSEEK_MODEL` | 模型名称 | `deepseek-flash` |
 | `DEEPSEEK_THINKING` | 思考模式；设为 `disabled` / `off` / `false` / `0` 可关闭，其他任何值保持开启 | 开启 |
 | `DEEPSEEK_REASONING_EFFORT` | 思考强度：`minimal` / `low` / `medium` / `high` / `xhigh` / `max` / `ultra` | `high` |
+| `LCODE_SHELL_TIMEOUT` | `run_shell` 的默认超时秒数；`0` 表示不限制 | `120` |
 | `LCODE_HOME` | 会话存储的根目录（会话位于其下的 `sessions/`） | `$XDG_DATA_HOME/lcode`，否则为 `~/.local/share/lcode` |
 
 ## 运行
@@ -137,6 +139,8 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
                                    （默认：high）
 --max-iterations <n>               每 n 轮工具调用打印一次提示；一个轮次会持续
                                    运行，直到模型不再调用工具（0 = 不限，默认值）
+--shell-timeout <seconds>          杀掉运行时间超过该秒数的 run_shell 命令
+                                   （0 = 不限制，默认值：120）
 -h, --help                         显示帮助
 -V, --version                      显示版本并退出
 ```
@@ -284,6 +288,16 @@ lcode 改为发送 `{"type": "disabled"}` 并使用固定的 `temperature` `0.2`
 默认情况下，lcode 会以 Server-Sent Events 流式请求响应，模型的思考与正文会在 token 到达时立即打印，
 而不是等待整段回复完成。每轮结束时的 token 用量统计仍取自流式响应的最后一个数据块。传入
 `--no-stream` 可回退为先缓冲完整响应再打印，适用于不支持 SSE 的服务端或代理。
+
+## Shell 命令超时
+
+一条卡住的 `run_shell` 命令（构建卡死、交互式程序等待输入、死循环）会阻塞整个轮次。传入
+`--shell-timeout <seconds>`（或设置 `LCODE_SHELL_TIMEOUT`）可为每条命令设置上限：一旦超时，
+lcode 会杀掉该命令的整个进程组（覆盖管道、`make` 等孙进程），并把已收集到的输出作为超时结果
+返回。默认值为 `120` 秒；传 `0` 可关闭超时。
+
+模型也可以给 `run_shell` 工具传一个单次调用的 `timeout` 参数（秒）来覆盖配置的默认值；传 `0`
+则该次调用不限制超时。与按 `ESC` 不同，超时不会中断当前轮次——模型只是收到超时的输出并继续。
 
 ## 中断与重定向
 

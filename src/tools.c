@@ -26,6 +26,7 @@
 #define DISPLAY_MAX_LINES 10
 
 static int g_non_interactive = 0;
+static int g_shell_timeout = SHELL_TIMEOUT_DEFAULT;
 
 static int ui_choose(const char *question, char *const *opts, int n);
 
@@ -593,6 +594,16 @@ static char *tool_run_shell(json_object *args)
     if (!trust_active_root())
         return xstrdup("error: no trusted directory is active; refusing to run commands");
 
+    /* A per-call timeout overrides the configured default; 0 disables it. */
+    int timeout_secs = g_shell_timeout;
+    json_object *tv;
+    if (args && json_object_object_get_ex(args, "timeout", &tv) &&
+        json_object_get_type(tv) == json_type_int) {
+        timeout_secs = json_object_get_int(tv);
+        if (timeout_secs < 0)
+            timeout_secs = 0;
+    }
+
     int fds[2];
     if (pipe(fds) != 0) {
         char *msg = NULL;
@@ -664,6 +675,7 @@ static char *tool_run_shell(json_object *args)
     t_last = t_start;
 
     int interrupted = 0;
+    int timed_out = 0;
     for (;;) {
         if (streamed)
             display_drain(&job, &ds, 0);
@@ -683,6 +695,21 @@ static char *tool_run_shell(json_object *args)
             shell_job_kill(pid);
             interrupt_request();
             break;
+        }
+
+        if (timeout_secs > 0) {
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            double elapsed = (double)(now.tv_sec - t_start.tv_sec) +
+                             (double)(now.tv_nsec - t_start.tv_nsec) / 1e9;
+            if (elapsed >= (double)timeout_secs) {
+                timed_out = 1;
+                pthread_mutex_lock(&job.lock);
+                job.stop = 1;
+                pthread_mutex_unlock(&job.lock);
+                shell_job_kill(pid);
+                break;
+            }
         }
 
         if (streamed) {
@@ -722,6 +749,9 @@ static char *tool_run_shell(json_object *args)
     if (streamed) {
         if (interrupted)
             fputs("\033[1;33m[interrupted by user]\033[0m\n", stdout);
+        if (timed_out)
+            fprintf(stdout, "\033[1;33m[timed out after %d second%s]\033[0m\n",
+                    timeout_secs, timeout_secs == 1 ? "" : "s");
         if (job.exited && WIFEXITED(status))
             fprintf(stdout, "\033[0;90mexit_status: %d\033[0m\n",
                     WEXITSTATUS(status));
@@ -747,6 +777,9 @@ static char *tool_run_shell(json_object *args)
 
     if (interrupted)
         sb_add(&result, "[interrupted by user]\n");
+    if (timed_out)
+        sb_addf(&result, "[timed out after %d second%s]\n",
+                timeout_secs, timeout_secs == 1 ? "" : "s");
 
     if (WIFEXITED(status))
         sb_addf(&result, "exit_status: %d\n", WEXITSTATUS(status));
@@ -766,6 +799,11 @@ static char *tool_run_shell(json_object *args)
 void tools_set_non_interactive(int enabled)
 {
     g_non_interactive = enabled ? 1 : 0;
+}
+
+void tools_set_shell_timeout(int seconds)
+{
+    g_shell_timeout = seconds > 0 ? seconds : 0;
 }
 
 static int menu_is_tty(void)
@@ -1100,9 +1138,14 @@ json_object *tools_schema(void)
 
     json_object *p4 = json_object_new_object();
     json_object_object_add(p4, "command", prop("string", "Shell command to execute"));
+    json_object_object_add(p4, "timeout",
+                           prop("integer", "Maximum seconds to let the command run before "
+                                           "killing its process group; omit to use the "
+                                           "configured default, 0 to disable the timeout"));
     json_object_array_add(tools, make_tool(
         "run_shell",
-        "Run a shell command and return its combined output and exit status.",
+        "Run a shell command and return its combined output and exit status. If it runs "
+        "longer than the timeout it is killed and the output is reported as timed out.",
         p4, required1("command")));
 
     json_object *p5 = json_object_new_object();

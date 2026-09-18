@@ -20,7 +20,9 @@ A command-line coding agent written in C. It talks to DeepSeek's OpenAI-compatib
     must match exactly once (pass `replace_all` to change every occurrence). Prefer this
     over `write_file` when changing part of an existing file
   - `list_dir` — list directory entries (type and size)
-  - `run_shell` — run a shell command and return its output and exit code
+  - `run_shell` — run a shell command and return its output and exit code; an optional
+    `timeout` argument (seconds) kills the command's process group if it runs too long,
+    otherwise the default from `--shell-timeout` / `LCODE_SHELL_TIMEOUT` applies
   - `ask_user` — show an interactive menu when the user must choose among several options (arrow/number keys to select, `Enter` to confirm, `q`/`Esc` to cancel; falls back to numbered input when not attached to a TTY)
     - With `--non-interactive` (or `-y`) no menu is shown; the decision is handed back to the model, which picks for itself and completes the task silently
 - Skills: automatically discover skills (`SKILL.md`) from convention directories, list them in the system prompt, and let the model load a skill's full instructions on demand through the `skill` tool
@@ -103,6 +105,7 @@ Optional environment variables:
 | `DEEPSEEK_MODEL` | Model name | `deepseek-flash` |
 | `DEEPSEEK_THINKING` | Thinking mode; set to `disabled` / `off` / `false` / `0` to disable, any other value keeps it enabled | enabled |
 | `DEEPSEEK_REASONING_EFFORT` | Thinking effort: `minimal` / `low` / `medium` / `high` / `xhigh` / `max` / `ultra` | `high` |
+| `LCODE_SHELL_TIMEOUT` | Default `run_shell` timeout in seconds; `0` disables it | `120` |
 | `LCODE_HOME` | Root directory for session storage (sessions live under its `sessions/`) | `$XDG_DATA_HOME/lcode`, otherwise `~/.local/share/lcode` |
 
 ## Running
@@ -139,6 +142,8 @@ Command-line options (these override the corresponding environment variables):
 --max-iterations <n>               print a notice every n tool-call rounds; a turn keeps
                                    running until the model stops calling tools (0 = unlimited,
                                    the default)
+--shell-timeout <seconds>          kill a run_shell command that runs longer than this
+                                   (0 = no timeout, default: 120)
 -h, --help                         show help
 -V, --version                      show version and exit
 ```
@@ -312,6 +317,19 @@ model's thinking and text as soon as the tokens arrive, instead of waiting for t
 reply. The token-usage stats at the end of a turn still come from the final stream chunk.
 Pass `--no-stream` to fall back to buffering the complete response before printing it,
 which is useful for endpoints or proxies that do not support SSE.
+
+## Shell command timeout
+
+A `run_shell` command that hangs (a stuck build, an interactive program waiting for input, a
+runaway loop) would otherwise block the whole turn. Pass `--shell-timeout <seconds>` (or set
+`LCODE_SHELL_TIMEOUT`) to put a limit on every command: once it elapses, lcode kills the command's
+whole process group (reaching pipelines, `make`, and other grandchildren) and reports the output
+collected so far as timed out. The default is `120` seconds; pass `0` to disable the timeout.
+
+The model can also pass a per-call `timeout` argument (in seconds) to the `run_shell` tool to
+override the configured default for a single command; `0` disables the timeout for that call. Unlike
+pressing `ESC`, a timeout does not interrupt the turn — the model simply receives the timed-out
+output and can continue.
 
 ## Interrupting and redirecting
 

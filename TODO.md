@@ -14,8 +14,11 @@
       参数（`src/tools.c`），大文件读不全。
 - [ ] 并行执行工具调用。`run_turn` 里是串行 `for (t = 0; t < n; t++)`
       （`src/agent.c`），模型一次返回多个工具会一个个跑。
-- [ ] 给 `run_shell` 加超时。目前只有 curl 的 600s，命令卡死只能靠 ESC/SIGINT
+- [x] 给 `run_shell` 加超时。目前只有 curl 的 600s，命令卡死只能靠 ESC/SIGINT
       （`src/tools.c:tool_run_shell`）。
+      已实现：`--shell-timeout` / `LCODE_SHELL_TIMEOUT` 设置默认超时（默认 120s，
+      0 关闭），工具 schema 新增可选 `timeout` 参数按次覆盖；超时后杀掉整个进程组
+      并把已收集输出作为超时结果返回（不同于 ESC 中断，不结束当前轮次）。
 
 ## 二、网络/API 层
 
