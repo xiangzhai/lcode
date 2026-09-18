@@ -25,6 +25,7 @@ add_executable(lcode
   src/tools.c
   src/session.c
   src/skills.c
+  src/trust.c
   src/interrupt.c
 )
 

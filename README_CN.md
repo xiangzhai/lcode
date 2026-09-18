@@ -20,6 +20,7 @@
   - `ask_user` — 当用户需要在多个选项中做出选择时显示交互式菜单（用方向键/数字键选择，`Enter` 确认，`q`/`Esc` 取消；在非 TTY 环境下回退为数字输入）
     - 使用 `--non-interactive`（或 `-y`）时不显示菜单；决策交还给模型，由模型自行选择并静默完成任务
 - 技能（Skills）：自动从约定目录中发现技能（`SKILL.md`），在系统提示中列出，并让模型按需通过 `skill` 工具加载技能的完整指令
+- 目录信任：lcode 在访问新目录前会先询问你是否信任，并记住你的选择；未经信任的目录绝不会被访问
 
 ## 依赖
 
@@ -121,6 +122,8 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
 --resume                           恢复最近更新的会话
 --list-sessions                    列出已保存的会话并退出
 --list-skills                      列出已发现的技能并退出
+--trust                            信任当前目录（不再询问）并保存
+--list-trusted                     列出已信任的目录并退出
 --non-interactive, -y              非交互模式：让模型自行决策、绝不询问用户；
                                    若同时给出 --prompt/--prompt-file，完成后即退出
 --thinking                         开启思考模式（默认）
@@ -154,6 +157,23 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
 （等价于 `--append-system-prompt-file AGENTS.md`）。如果显式给出了 `--append-system-prompt` 或
 `--append-system-prompt-file`，则以其为准，不再加载 `AGENTS.md`。
 可用它来固化项目的开发与调试约定，正如本仓库自带的 `AGENTS.md` 那样。
+
+## 目录信任
+
+lcode 只会读取、写入和运行命令于你明确信任的目录之内。首次在某个目录中运行时，lcode 会询问：
+
+```
+lcode: '/path/to/project' is not a trusted directory.
+lcode will only read, write and run commands inside a directory you trust.
+Trust this directory and its contents? [y/N]
+```
+
+回答 yes 会把该目录记录到信任配置文件并允许 lcode 运行；回答 no 会中止运行，因此该目录绝不会被触碰。若某个父目录已被信任，其子目录也视为已信任，因此信任项目根目录即可覆盖其所有子目录。
+
+文件工具（`read_file`、`write_file`、`list_dir`）会拒绝任何经 `..` 或符号链接解析后落到信任目录之外的路径；当没有生效的信任目录时，`run_shell` 拒绝运行。由于 shell 命令本身仍可能访问其他地方，请仅在你愿意让 lcode 在其中运行任意命令时才信任该目录。
+
+已信任目录保存在 `$LCODE_HOME/trusted.json`（设置了 `LCODE_HOME` 时），否则保存在
+`$XDG_CONFIG_HOME/lcode/trusted.json`，否则保存在 `~/.config/lcode/trusted.json`。可用 `--list-trusted` 查看。在非交互模式（`--non-interactive`）下 lcode 绝不询问；请用 `--trust` 预先信任当前目录。
 
 ## 会话管理
 

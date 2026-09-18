@@ -1,6 +1,7 @@
 #include "tools.h"
 #include "interrupt.h"
 #include "skills.h"
+#include "trust.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -38,6 +39,26 @@ static const char *arg_str(json_object *args, const char *key)
 static char *xstrdup(const char *s)
 {
     return s ? strdup(s) : NULL;
+}
+
+/*
+ * Confine the file tools to the directory tree the user trusted. Paths are
+ * canonicalised (resolving symlinks and "..") before the check so neither
+ * relative escapes nor symlinks can reach outside the active root.
+ */
+static char *path_guard(const char *path)
+{
+    const char *root = trust_active_root();
+    if (!root)
+        return xstrdup("error: no trusted directory is active; refusing file access");
+    if (trust_path_allowed(path))
+        return NULL;
+
+    char *msg = NULL;
+    if (asprintf(&msg, "error: '%s' is outside the trusted directory '%s'; refusing access",
+                 path ? path : ".", root) < 0)
+        return xstrdup("error: path is outside the trusted directory");
+    return msg;
 }
 
 typedef struct {
@@ -156,6 +177,10 @@ static char *tool_read_file(json_object *args)
     if (!path)
         return xstrdup("error: missing required argument 'path'");
 
+    char *guard = path_guard(path);
+    if (guard)
+        return guard;
+
     FILE *f = fopen(path, "rb");
     if (!f) {
         char *msg = NULL;
@@ -179,6 +204,10 @@ static char *tool_write_file(json_object *args)
         return xstrdup("error: missing required argument 'path'");
     if (!content)
         return xstrdup("error: missing required argument 'content'");
+
+    char *guard = path_guard(path);
+    if (guard)
+        return guard;
 
     FILE *f = fopen(path, "wb");
     if (!f) {
@@ -208,6 +237,10 @@ static char *tool_list_dir(json_object *args)
     const char *path = arg_str(args, "path");
     if (!path)
         path = ".";
+
+    char *guard = path_guard(path);
+    if (guard)
+        return guard;
 
     DIR *d = opendir(path);
     if (!d) {
@@ -397,6 +430,9 @@ static char *tool_run_shell(json_object *args)
     const char *command = arg_str(args, "command");
     if (!command)
         return xstrdup("error: missing required argument 'command'");
+
+    if (!trust_active_root())
+        return xstrdup("error: no trusted directory is active; refusing to run commands");
 
     int fds[2];
     if (pipe(fds) != 0) {

@@ -20,6 +20,7 @@ A command-line coding agent written in C. It talks to DeepSeek's OpenAI-compatib
   - `ask_user` — show an interactive menu when the user must choose among several options (arrow/number keys to select, `Enter` to confirm, `q`/`Esc` to cancel; falls back to numbered input when not attached to a TTY)
     - With `--non-interactive` (or `-y`) no menu is shown; the decision is handed back to the model, which picks for itself and completes the task silently
 - Skills: automatically discover skills (`SKILL.md`) from convention directories, list them in the system prompt, and let the model load a skill's full instructions on demand through the `skill` tool
+- Directory trust: before touching a new directory lcode asks whether you trust it and remembers the answer; directories you have not trusted are never accessed
 
 ## Dependencies
 
@@ -121,6 +122,8 @@ Command-line options (these override the corresponding environment variables):
 --resume                           resume the most recently updated session
 --list-sessions                    list saved sessions and exit
 --list-skills                      list discovered skills and exit
+--trust                            trust the current directory without asking and save it
+--list-trusted                     list trusted directories and exit
 --non-interactive, -y              non-interactive mode: let the model decide, never ask the user;
                                    if --prompt/--prompt-file is also given, exit once it finishes
 --thinking                         enable thinking mode (default)
@@ -157,6 +160,31 @@ system prompt (equivalent to `--append-system-prompt-file AGENTS.md`). If `--app
 `--append-system-prompt-file` is given explicitly, that takes precedence and `AGENTS.md` is not loaded.
 Use it to pin down a project's development and debugging conventions, as this repository's own
 `AGENTS.md` does.
+
+## Directory trust
+
+lcode only reads, writes and runs commands inside directories you have explicitly trusted.
+On the first run in a directory, lcode asks:
+
+```
+lcode: '/path/to/project' is not a trusted directory.
+lcode will only read, write and run commands inside a directory you trust.
+Trust this directory and its contents? [y/N]
+```
+
+Answering yes records the directory in the trust config file and lets lcode run; answering no
+aborts the run so the directory is never touched. A directory is also considered trusted when one
+of its parents is trusted, so trusting a project root covers its subdirectories.
+
+The file tools (`read_file`, `write_file`, `list_dir`) refuse any path that resolves (through `..`
+or symlinks) outside the trusted directory, and `run_shell` refuses to run when no trusted
+directory is active. Because a shell command can still reach elsewhere on its own, trust a
+directory only when you are comfortable with lcode running arbitrary commands in it.
+
+Trusted directories are stored in `$LCODE_HOME/trusted.json` when `LCODE_HOME` is set, otherwise
+`$XDG_CONFIG_HOME/lcode/trusted.json`, otherwise `~/.config/lcode/trusted.json`. Use
+`--list-trusted` to inspect them. In non-interactive mode (`--non-interactive`) lcode never
+prompts; pass `--trust` to trust the current directory up front.
 
 ## Session management
 

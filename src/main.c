@@ -2,9 +2,11 @@
 #include "http.h"
 #include "session.h"
 #include "skills.h"
+#include "trust.h"
 #include "version.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -90,6 +92,8 @@ static void usage(const char *prog)
             "  --resume                    resume the most recently updated session\n"
             "  --list-sessions             list saved sessions and exit\n"
             "  --list-skills               list available skills and exit\n"
+            "  --trust                     trust the current directory without asking\n"
+            "  --list-trusted              list trusted directories and exit\n"
             "  --non-interactive, -y       let the model decide; never ask, exit after --prompt\n"
             "  --thinking                  enable DeepSeek thinking mode (default)\n"
             "  --no-thinking               disable thinking mode\n"
@@ -102,8 +106,69 @@ static void usage(const char *prog)
             "env: DEEPSEEK_API_KEY (required), DEEPSEEK_BASE_URL, DEEPSEEK_MODEL,\n"
             "     DEEPSEEK_THINKING, DEEPSEEK_REASONING_EFFORT, LCODE_HOME\n"
             "note: AGENTS.md in the current directory is auto-appended to the system prompt\n"
-            "note: skills are discovered in .lcode/skills and $LCODE_HOME/skills\n",
+            "note: skills are discovered in .lcode/skills and $LCODE_HOME/skills\n"
+            "note: lcode only accesses directories you have trusted; it asks once per\n"
+            "      directory and remembers the answer in the trust config file\n",
             prog);
+}
+
+/*
+ * Make sure lcode is allowed to work in the current directory. A directory is
+ * trusted when it, or one of its parents, was approved before and recorded in
+ * the config file; otherwise the user is asked once and the answer is saved.
+ * Refusing trust aborts the run so the directory is never touched.
+ */
+static int ensure_trust(int non_interactive, int force_trust)
+{
+    char cwd[PATH_MAX];
+    if (!getcwd(cwd, sizeof(cwd))) {
+        fprintf(stderr, "error: cannot determine the current directory: %s\n",
+                strerror(errno));
+        return -1;
+    }
+
+    const char *root = trust_matching_root(cwd);
+    if (root) {
+        if (trust_set_active(root) != 0) {
+            fprintf(stderr, "error: out of memory\n");
+            return -1;
+        }
+        printf("trusted directory: %s\n", root);
+        return 0;
+    }
+
+    if (force_trust) {
+        if (trust_add(cwd) != 0 || trust_set_active(cwd) != 0) {
+            fprintf(stderr, "error: failed to save trusted directory '%s'\n", cwd);
+            return -1;
+        }
+        printf("trusted directory: %s (saved to %s)\n", cwd, trust_config_path());
+        return 0;
+    }
+
+    if (non_interactive || !isatty(STDIN_FILENO)) {
+        fprintf(stderr,
+                "error: '%s' is not a trusted directory and trust cannot be "
+                "requested in this mode\n"
+                "       run lcode interactively to approve it, or pass --trust\n",
+                cwd);
+        return -1;
+    }
+
+    if (!trust_ask(cwd)) {
+        fprintf(stderr,
+                "lcode: refusing to access untrusted directory '%s'\n"
+                "       re-run and answer 'y', or pass --trust to trust it\n",
+                cwd);
+        return -1;
+    }
+
+    if (trust_add(cwd) != 0 || trust_set_active(cwd) != 0) {
+        fprintf(stderr, "error: failed to save trusted directory '%s'\n", cwd);
+        return -1;
+    }
+    printf("trusted directory: %s (saved to %s)\n", cwd, trust_config_path());
+    return 0;
 }
 
 int main(int argc, char **argv)
@@ -132,6 +197,8 @@ int main(int argc, char **argv)
     int owned_n = 0;
     int list_sessions = 0;
     int list_skills = 0;
+    int list_trusted = 0;
+    int force_trust = 0;
     int resume = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -173,6 +240,10 @@ int main(int argc, char **argv)
             list_sessions = 1;
         } else if (strcmp(argv[i], "--list-skills") == 0) {
             list_skills = 1;
+        } else if (strcmp(argv[i], "--trust") == 0) {
+            force_trust = 1;
+        } else if (strcmp(argv[i], "--list-trusted") == 0) {
+            list_trusted = 1;
         } else if (strcmp(argv[i], "--non-interactive") == 0 || strcmp(argv[i], "-y") == 0) {
             cfg.non_interactive = 1;
         } else if (strcmp(argv[i], "--thinking") == 0) {
@@ -224,6 +295,15 @@ int main(int argc, char **argv)
         return 0;
     }
 
+    if (list_trusted) {
+        trust_load();
+        trust_list();
+        trust_free();
+        for (int k = 0; k < owned_n; k++)
+            free(owned[k]);
+        return 0;
+    }
+
     if (cfg.session && !session_validate_name(cfg.session)) {
         fprintf(stderr, "error: invalid session name '%s'\n", cfg.session);
         for (int k = 0; k < owned_n; k++)
@@ -250,10 +330,19 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    trust_load();
+    if (ensure_trust(cfg.non_interactive, force_trust) != 0) {
+        trust_free();
+        for (int k = 0; k < owned_n; k++)
+            free(owned[k]);
+        return 1;
+    }
+
     if (!cfg.append_system_prompt &&
         access(APPEND_PROMPT_FILE, R_OK) == 0) {
         char *content = read_whole_file(APPEND_PROMPT_FILE, "append system prompt file");
         if (!content) {
+            trust_free();
             for (int k = 0; k < owned_n; k++)
                 free(owned[k]);
             return 1;
@@ -266,6 +355,7 @@ int main(int argc, char **argv)
     int rc = agent_run(&cfg);
     http_global_cleanup();
     skills_free();
+    trust_free();
 
     for (int k = 0; k < owned_n; k++)
         free(owned[k]);
