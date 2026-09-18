@@ -10,6 +10,7 @@
 - 随时可中断：在模型请求或工具执行过程中按 `ESC` 即可中止当前轮次，然后输入新的指示让模型转向其他方向
 - 会话管理：会话以 JSON 形式持久化到磁盘，可命名、恢复、列出与切换
 - DeepSeek 思考模式：默认开启，可通过 `--reasoning-effort` 配置强度；模型的思考内容会以暗淡文本前缀 `[thinking]` 打印
+- 流式输出：响应通过 Server-Sent Events 流式返回，思考与正文会随模型逐 token 生成而实时显示（可用 `--no-stream` 关闭）
 - Token 用量统计：每次请求后会把 prompt / completion / total 以及缓存命中率打印到 stderr；使用 `/usage` 查看累计值
 - 函数调用循环：模型可以连续调用多个工具
 - 内置工具：
@@ -128,6 +129,8 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
 --list-trusted                     列出已信任的目录并退出
 --non-interactive, -y              非交互模式：让模型自行决策、绝不询问用户；
                                    若同时给出 --prompt/--prompt-file，完成后即退出
+--stream                           通过 SSE 流式输出响应（默认）
+--no-stream                        先缓冲完整响应再打印
 --thinking                         开启思考模式（默认）
 --no-thinking                      关闭思考模式
 --reasoning-effort <level>         思考强度：minimal|low|medium|high|xhigh|max|ultra
@@ -275,6 +278,12 @@ lcode 改为发送 `{"type": "disabled"}` 并使用固定的 `temperature` `0.2`
 `--reasoning-effort <level>`（或 `DEEPSEEK_REASONING_EFFORT`）选择强度。有效取值为
 `minimal`、`low`、`medium`、`high`、`xhigh`、`max`、`ultra`，默认为 `high`。
 启动时会对非法的强度取值报错。
+
+## 流式输出
+
+默认情况下，lcode 会以 Server-Sent Events 流式请求响应，模型的思考与正文会在 token 到达时立即打印，
+而不是等待整段回复完成。每轮结束时的 token 用量统计仍取自流式响应的最后一个数据块。传入
+`--no-stream` 可回退为先缓冲完整响应再打印，适用于不支持 SSE 的服务端或代理。
 
 ## 中断与重定向
 

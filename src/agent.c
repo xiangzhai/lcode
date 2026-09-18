@@ -3,6 +3,7 @@
 #include "interrupt.h"
 #include "session.h"
 #include "skills.h"
+#include "strbuf.h"
 #include "tools.h"
 
 #include <json-c/json.h>
@@ -183,6 +184,13 @@ static json_object *build_request(AgentConfig *cfg, json_object *messages)
     json_object_object_add(req, "messages", json_object_get(messages));
     json_object_object_add(req, "tools", tools_schema());
     json_object_object_add(req, "tool_choice", json_object_new_string("auto"));
+
+    if (cfg->stream) {
+        json_object_object_add(req, "stream", json_object_new_boolean(1));
+        json_object *stream_opts = json_object_new_object();
+        json_object_object_add(stream_opts, "include_usage", json_object_new_boolean(1));
+        json_object_object_add(req, "stream_options", stream_opts);
+    }
 
     json_object *thinking = json_object_new_object();
     json_object_object_add(thinking, "type",
@@ -462,6 +470,207 @@ static void add_interrupted_tool(json_object *messages, json_object *tc)
     json_object_array_add(messages, tm);
 }
 
+/*
+ * Streaming (SSE) reassembly. The API splits one assistant message across many
+ * deltas: content and reasoning arrive as text fragments, and tool calls arrive
+ * in pieces keyed by an index. Text is rendered as it arrives while the pieces
+ * are accumulated into a single assistant message that can be fed back to the
+ * API.
+ */
+typedef struct {
+    char *id;
+    StrBuf name;
+    StrBuf args;
+} ToolCallAcc;
+
+typedef struct {
+    AgentConfig *cfg;
+    StrBuf content;
+    StrBuf reasoning;
+    ToolCallAcc *calls;
+    int ncalls;
+    int cap;
+    json_object *usage;
+    int reasoning_started;
+    int content_started;
+    int got_reasoning;
+} StreamState;
+
+static ToolCallAcc *stream_call(StreamState *st, int index)
+{
+    while (st->ncalls <= index) {
+        if (st->ncalls == st->cap) {
+            int ncap = st->cap ? st->cap * 2 : 4;
+            ToolCallAcc *nt = realloc(st->calls, sizeof(*nt) * (size_t)ncap);
+            if (!nt)
+                return NULL;
+            st->calls = nt;
+            st->cap = ncap;
+        }
+        ToolCallAcc *c = &st->calls[st->ncalls++];
+        memset(c, 0, sizeof(*c));
+        sb_init(&c->name, 32);
+        sb_init(&c->args, 64);
+    }
+    return &st->calls[index];
+}
+
+static void stream_apply_tool_delta(StreamState *st, json_object *tc)
+{
+    json_object *v;
+    int index = st->ncalls;
+    if (json_object_object_get_ex(tc, "index", &v) &&
+        json_object_get_type(v) == json_type_int)
+        index = json_object_get_int(v);
+    if (index < 0)
+        return;
+
+    ToolCallAcc *c = stream_call(st, index);
+    if (!c)
+        return;
+
+    if (json_object_object_get_ex(tc, "id", &v) &&
+        json_object_get_type(v) == json_type_string) {
+        free(c->id);
+        c->id = strdup(json_object_get_string(v));
+    }
+
+    json_object *fn;
+    if (json_object_object_get_ex(tc, "function", &fn) && fn) {
+        if (json_object_object_get_ex(fn, "name", &v) &&
+            json_object_get_type(v) == json_type_string)
+            sb_add(&c->name, json_object_get_string(v));
+        if (json_object_object_get_ex(fn, "arguments", &v) &&
+            json_object_get_type(v) == json_type_string)
+            sb_add(&c->args, json_object_get_string(v));
+    }
+}
+
+static void stream_apply_delta(StreamState *st, json_object *delta)
+{
+    json_object *v;
+
+    if (json_object_object_get_ex(delta, "reasoning_content", &v) &&
+        json_object_get_type(v) == json_type_string) {
+        const char *s = json_object_get_string(v);
+        if (*s) {
+            if (!st->reasoning_started) {
+                printf("\n\033[0;90m[thinking]\033[0m\n");
+                st->reasoning_started = 1;
+            }
+            printf("\033[0;90m%s\033[0m", s);
+            fflush(stdout);
+            sb_add(&st->reasoning, s);
+            st->got_reasoning = 1;
+        }
+    }
+
+    if (json_object_object_get_ex(delta, "content", &v) &&
+        json_object_get_type(v) == json_type_string) {
+        const char *s = json_object_get_string(v);
+        if (*s) {
+            if (!st->content_started) {
+                printf("\n");
+                st->content_started = 1;
+            }
+            fputs(s, stdout);
+            fflush(stdout);
+            sb_add(&st->content, s);
+        }
+    }
+
+    json_object *tcs;
+    if (json_object_object_get_ex(delta, "tool_calls", &tcs) &&
+        json_object_get_type(tcs) == json_type_array) {
+        int n = (int)json_object_array_length(tcs);
+        for (int i = 0; i < n; i++)
+            stream_apply_tool_delta(st, json_object_array_get_idx(tcs, i));
+    }
+}
+
+static void stream_on_event(const char *data, void *userdata)
+{
+    StreamState *st = userdata;
+    json_object *root = json_tokener_parse(data);
+    if (!root)
+        return;
+
+    json_object *usage;
+    if (json_object_object_get_ex(root, "usage", &usage) && usage &&
+        json_object_get_type(usage) == json_type_object) {
+        if (st->usage)
+            json_object_put(st->usage);
+        st->usage = json_object_get(usage);
+    }
+
+    json_object *choices;
+    if (json_object_object_get_ex(root, "choices", &choices) &&
+        json_object_get_type(choices) == json_type_array &&
+        json_object_array_length(choices) > 0) {
+        json_object *choice = json_object_array_get_idx(choices, 0);
+        json_object *delta;
+        if (json_object_object_get_ex(choice, "delta", &delta) && delta)
+            stream_apply_delta(st, delta);
+    }
+
+    json_object_put(root);
+}
+
+static json_object *stream_build_message(AgentConfig *cfg, StreamState *st)
+{
+    json_object *msg = json_object_new_object();
+    json_object_object_add(msg, "role", json_object_new_string("assistant"));
+
+    if (cfg->thinking && st->got_reasoning)
+        json_object_object_add(msg, "reasoning_content",
+                               json_object_new_string(st->reasoning.buf ? st->reasoning.buf : ""));
+
+    json_object_object_add(msg, "content",
+                           json_object_new_string(st->content.buf ? st->content.buf : ""));
+
+    if (st->ncalls > 0) {
+        json_object *tcs = json_object_new_array();
+        for (int i = 0; i < st->ncalls; i++) {
+            ToolCallAcc *c = &st->calls[i];
+            json_object *tc = json_object_new_object();
+            json_object_object_add(tc, "id", json_object_new_string(c->id ? c->id : ""));
+            json_object_object_add(tc, "type", json_object_new_string("function"));
+            json_object *fn = json_object_new_object();
+            json_object_object_add(fn, "name",
+                                   json_object_new_string(c->name.buf ? c->name.buf : ""));
+            json_object_object_add(fn, "arguments",
+                                   json_object_new_string(c->args.buf ? c->args.buf : ""));
+            json_object_object_add(tc, "function", fn);
+            json_object_array_add(tcs, tc);
+        }
+        json_object_object_add(msg, "tool_calls", tcs);
+    }
+    return msg;
+}
+
+static void stream_state_free(StreamState *st)
+{
+    sb_free(&st->content);
+    sb_free(&st->reasoning);
+    for (int i = 0; i < st->ncalls; i++) {
+        free(st->calls[i].id);
+        sb_free(&st->calls[i].name);
+        sb_free(&st->calls[i].args);
+    }
+    free(st->calls);
+    if (st->usage)
+        json_object_put(st->usage);
+    memset(st, 0, sizeof(*st));
+}
+
+static void stream_end_line(const StreamState *st)
+{
+    if (st->reasoning_started || st->content_started) {
+        fputc('\n', stdout);
+        fflush(stdout);
+    }
+}
+
 static int run_turn(AgentConfig *cfg, json_object *messages, const char *url,
                     UsageTotals *usage)
 {
@@ -478,77 +687,123 @@ static int run_turn(AgentConfig *cfg, json_object *messages, const char *url,
         json_object *req = build_request(cfg, messages);
         const char *body = json_object_to_json_string_ext(req, JSON_C_TO_STRING_PLAIN);
 
-        HttpResponse res = http_post_json(url, cfg->api_key, body);
-        json_object_put(req);
+        json_object *message = NULL;
 
-        if (res.interrupted) {
+        if (cfg->stream) {
+            StreamState st;
+            memset(&st, 0, sizeof(st));
+
+            HttpResponse res = http_post_json_stream(url, cfg->api_key, body,
+                                                     stream_on_event, &st);
+            json_object_put(req);
+
+            if (res.interrupted) {
+                stream_end_line(&st);
+                stream_state_free(&st);
+                http_response_free(&res);
+                return TURN_INTERRUPTED;
+            }
+            if (res.error) {
+                stream_end_line(&st);
+                fprintf(stderr, "request failed: %s\n", res.error);
+                stream_state_free(&st);
+                http_response_free(&res);
+                return TURN_ERROR;
+            }
+            if (res.status < 200 || res.status >= 300) {
+                stream_end_line(&st);
+                fprintf(stderr, "API error (HTTP %ld): %s\n", res.status,
+                        res.body ? res.body : "");
+                stream_state_free(&st);
+                http_response_free(&res);
+                return TURN_ERROR;
+            }
             http_response_free(&res);
-            return TURN_INTERRUPTED;
-        }
-        if (res.error) {
-            fprintf(stderr, "request failed: %s\n", res.error);
+
+            stream_end_line(&st);
+            if (st.usage)
+                usage_track(usage, st.usage);
+
+            message = stream_build_message(cfg, &st);
+            stream_state_free(&st);
+        } else {
+            HttpResponse res = http_post_json(url, cfg->api_key, body);
+            json_object_put(req);
+
+            if (res.interrupted) {
+                http_response_free(&res);
+                return TURN_INTERRUPTED;
+            }
+            if (res.error) {
+                fprintf(stderr, "request failed: %s\n", res.error);
+                http_response_free(&res);
+                return TURN_ERROR;
+            }
+            if (res.status < 200 || res.status >= 300) {
+                fprintf(stderr, "API error (HTTP %ld): %s\n", res.status,
+                        res.body ? res.body : "");
+                http_response_free(&res);
+                return TURN_ERROR;
+            }
+
+            json_object *root = json_tokener_parse(res.body);
             http_response_free(&res);
-            return TURN_ERROR;
-        }
-        if (res.status < 200 || res.status >= 300) {
-            fprintf(stderr, "API error (HTTP %ld): %s\n", res.status, res.body ? res.body : "");
-            http_response_free(&res);
-            return TURN_ERROR;
-        }
+            if (!root) {
+                fprintf(stderr, "failed to parse API response\n");
+                return TURN_ERROR;
+            }
 
-        json_object *root = json_tokener_parse(res.body);
-        http_response_free(&res);
-        if (!root) {
-            fprintf(stderr, "failed to parse API response\n");
-            return TURN_ERROR;
-        }
+            json_object *usage_obj;
+            if (json_object_object_get_ex(root, "usage", &usage_obj))
+                usage_track(usage, usage_obj);
 
-        json_object *usage_obj;
-        if (json_object_object_get_ex(root, "usage", &usage_obj))
-            usage_track(usage, usage_obj);
+            json_object *choices, *choice;
+            if (!json_object_object_get_ex(root, "choices", &choices) ||
+                json_object_get_type(choices) != json_type_array ||
+                json_object_array_length(choices) == 0) {
+                fprintf(stderr, "unexpected response: %s\n",
+                        json_object_to_json_string(root));
+                json_object_put(root);
+                return TURN_ERROR;
+            }
+            choice = json_object_array_get_idx(choices, 0);
+            json_object *m;
+            if (!json_object_object_get_ex(choice, "message", &m)) {
+                fprintf(stderr, "response has no message\n");
+                json_object_put(root);
+                return TURN_ERROR;
+            }
 
-        json_object *choices, *choice, *message;
-        if (!json_object_object_get_ex(root, "choices", &choices) ||
-            json_object_get_type(choices) != json_type_array ||
-            json_object_array_length(choices) == 0) {
-            fprintf(stderr, "unexpected response: %s\n", json_object_to_json_string(root));
+            if (cfg->thinking)
+                print_reasoning(json_string_at(m, "reasoning_content"));
+
+            const char *text = json_string_at(m, "content");
+            if (text && *text)
+                printf("\n%s\n", text);
+
+            message = json_object_get(m);
             json_object_put(root);
-            return TURN_ERROR;
         }
-        choice = json_object_array_get_idx(choices, 0);
-        if (!json_object_object_get_ex(choice, "message", &message)) {
-            fprintf(stderr, "response has no message\n");
-            json_object_put(root);
-            return TURN_ERROR;
-        }
-
-        if (cfg->thinking)
-            print_reasoning(json_string_at(message, "reasoning_content"));
-
-        const char *text = json_string_at(message, "content");
-        if (text && *text)
-            printf("\n%s\n", text);
 
         json_object *tool_calls;
-        if (!json_object_object_get_ex(message, "tool_calls", &tool_calls) ||
-            !tool_calls ||
-            json_object_get_type(tool_calls) != json_type_array ||
-            json_object_array_length(tool_calls) == 0) {
-            json_object_array_add(messages, json_object_get(message));
-            json_object_put(root);
+        int has_tools = json_object_object_get_ex(message, "tool_calls", &tool_calls) &&
+                        tool_calls &&
+                        json_object_get_type(tool_calls) == json_type_array &&
+                        json_object_array_length(tool_calls) > 0;
+
+        /* The array takes over the message reference in both branches below. */
+        json_object_array_add(messages, message);
+
+        if (!has_tools)
             return TURN_OK;
-        }
 
-        json_object_array_add(messages, json_object_get(message));
-
-        int n = json_object_array_length(tool_calls);
+        int n = (int)json_object_array_length(tool_calls);
         for (int t = 0; t < n; t++) {
             json_object *tc = json_object_array_get_idx(tool_calls, t);
 
             if (interrupt_pending()) {
                 for (; t < n; t++)
                     add_interrupted_tool(messages, json_object_array_get_idx(tool_calls, t));
-                json_object_put(root);
                 return TURN_INTERRUPTED;
             }
 
@@ -580,8 +835,6 @@ static int run_turn(AgentConfig *cfg, json_object *messages, const char *url,
             json_object_array_add(messages, tm);
             free(result);
         }
-
-        json_object_put(root);
     }
 }
 

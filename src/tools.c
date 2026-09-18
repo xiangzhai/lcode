@@ -1,6 +1,7 @@
 #include "tools.h"
 #include "interrupt.h"
 #include "skills.h"
+#include "strbuf.h"
 #include "trust.h"
 
 #include <dirent.h>
@@ -9,7 +10,6 @@
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -113,88 +113,6 @@ static int trust_prompt(const char *path)
     free(no);
     free(dir);
     return trusted;
-}
-
-typedef struct {
-    char *buf;
-    size_t len;
-    size_t cap;
-} StrBuf;
-
-static int sb_init(StrBuf *sb, size_t cap)
-{
-    sb->buf = malloc(cap > 0 ? cap : 1);
-    if (!sb->buf)
-        return -1;
-    sb->buf[0] = '\0';
-    sb->len = 0;
-    sb->cap = cap > 0 ? cap : 1;
-    return 0;
-}
-
-static int sb_vaddf(StrBuf *sb, const char *fmt, va_list ap)
-{
-    va_list ap2;
-    va_copy(ap2, ap);
-    int need = vsnprintf(NULL, 0, fmt, ap2);
-    va_end(ap2);
-    if (need < 0)
-        return -1;
-
-    if (sb->len + (size_t)need + 1 > sb->cap) {
-        size_t ncap = sb->cap ? sb->cap : 1;
-        while (sb->len + (size_t)need + 1 > ncap)
-            ncap *= 2;
-        char *tmp = realloc(sb->buf, ncap);
-        if (!tmp)
-            return -1;
-        sb->buf = tmp;
-        sb->cap = ncap;
-    }
-    vsnprintf(sb->buf + sb->len, sb->cap - sb->len, fmt, ap);
-    sb->len += (size_t)need;
-    return 0;
-}
-
-static int sb_addf(StrBuf *sb, const char *fmt, ...)
-{
-    va_list ap;
-    va_start(ap, fmt);
-    int rc = sb_vaddf(sb, fmt, ap);
-    va_end(ap);
-    return rc;
-}
-
-static int sb_add(StrBuf *sb, const char *s)
-{
-    return sb_addf(sb, "%s", s);
-}
-
-static char *sb_steal(StrBuf *sb)
-{
-    char *b = sb->buf;
-    sb->buf = NULL;
-    sb->len = 0;
-    sb->cap = 0;
-    return b;
-}
-
-static int sb_addn(StrBuf *sb, const char *data, size_t n)
-{
-    if (sb->len + n + 1 > sb->cap) {
-        size_t ncap = sb->cap ? sb->cap : 1;
-        while (sb->len + n + 1 > ncap)
-            ncap *= 2;
-        char *tmp = realloc(sb->buf, ncap);
-        if (!tmp)
-            return -1;
-        sb->buf = tmp;
-        sb->cap = ncap;
-    }
-    memcpy(sb->buf + sb->len, data, n);
-    sb->len += n;
-    sb->buf[sb->len] = '\0';
-    return 0;
 }
 
 static char *read_stream(FILE *f)

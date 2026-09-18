@@ -10,6 +10,7 @@ A command-line coding agent written in C. It talks to DeepSeek's OpenAI-compatib
 - Interruptible at any time: press `ESC` while a model request or a tool execution is in flight to abort the current turn, then type a new instruction to steer the model in a different direction
 - Session management: sessions are persisted to disk as JSON and can be named, resumed, listed, and switched
 - DeepSeek thinking mode: enabled by default, with a configurable `--reasoning-effort` level; the model's reasoning is printed in dim text as `[thinking]`
+- Streaming output: responses are streamed over Server-Sent Events, so thinking and text appear token by token as the model generates them (disable with `--no-stream`)
 - Token usage stats: after each request, prompt / completion / total and the cache hit rate are printed to stderr; use `/usage` for the running total
 - Function calling loop: the model can call multiple tools in a row
 - Built-in tools:
@@ -129,6 +130,8 @@ Command-line options (these override the corresponding environment variables):
 --list-trusted                     list trusted directories and exit
 --non-interactive, -y              non-interactive mode: let the model decide, never ask the user;
                                    if --prompt/--prompt-file is also given, exit once it finishes
+--stream                           stream the response over SSE (default)
+--no-stream                        buffer the whole response before printing it
 --thinking                         enable thinking mode (default)
 --no-thinking                      disable thinking mode
 --reasoning-effort <level>         thinking effort: minimal|low|medium|high|xhigh|max|ultra
@@ -301,6 +304,14 @@ Toggle it with `--thinking` / `--no-thinking` or the `DEEPSEEK_THINKING` environ
 choose the effort with `--reasoning-effort <level>` (or `DEEPSEEK_REASONING_EFFORT`). Valid levels are
 `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`; the default is `high`. An invalid
 level is rejected at startup.
+
+## Streaming output
+
+By default lcode requests the response as a Server-Sent Events stream and prints the
+model's thinking and text as soon as the tokens arrive, instead of waiting for the whole
+reply. The token-usage stats at the end of a turn still come from the final stream chunk.
+Pass `--no-stream` to fall back to buffering the complete response before printing it,
+which is useful for endpoints or proxies that do not support SSE.
 
 ## Interrupting and redirecting
 

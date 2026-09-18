@@ -95,6 +95,8 @@ static void usage(const char *prog)
             "  --trust                     trust the current directory without asking\n"
             "  --list-trusted              list trusted directories and exit\n"
             "  --non-interactive, -y       let the model decide; never ask, exit after --prompt\n"
+            "  --stream                    stream the response over SSE (default)\n"
+            "  --no-stream                 buffer the whole response before printing\n"
             "  --thinking                  enable DeepSeek thinking mode (default)\n"
             "  --no-thinking               disable thinking mode\n"
             "  --reasoning-effort <level>  thinking effort: minimal|low|medium|high|xhigh|max|ultra\n"
@@ -184,6 +186,7 @@ int main(int argc, char **argv)
     cfg.session = NULL;
     cfg.non_interactive = 0;
     cfg.max_iterations = DEFAULT_MAX_ITERATIONS;
+    cfg.stream = 1;
     cfg.thinking = 1;
     cfg.reasoning_effort = env_or("DEEPSEEK_REASONING_EFFORT", "high");
 
@@ -247,6 +250,10 @@ int main(int argc, char **argv)
             list_trusted = 1;
         } else if (strcmp(argv[i], "--non-interactive") == 0 || strcmp(argv[i], "-y") == 0) {
             cfg.non_interactive = 1;
+        } else if (strcmp(argv[i], "--stream") == 0) {
+            cfg.stream = 1;
+        } else if (strcmp(argv[i], "--no-stream") == 0) {
+            cfg.stream = 0;
         } else if (strcmp(argv[i], "--thinking") == 0) {
             cfg.thinking = 1;
         } else if (strcmp(argv[i], "--no-thinking") == 0) {

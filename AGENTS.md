@@ -7,9 +7,10 @@ Update AGENTS.md to match the actual code.
 ## Project structure
 
 - `src/main.c` — entry point: environment and command-line argument parsing, `--list-*` modes, the directory-trust check, and `AGENTS.md` auto-loading
-- `src/agent.c` — system prompt and message construction, the REPL and tool-calling main loop, session commands (`/new`, `/switch`, ...), DeepSeek thinking mode, and token-usage accounting
-- `src/http.c` — libcurl-based HTTP POST with a spinner and ESC-interrupt polling, wraps `HttpResponse`
+- `src/agent.c` — system prompt and message construction, the REPL and tool-calling main loop, session commands (`/new`, `/switch`, ...), DeepSeek thinking mode, SSE delta reassembly, and token-usage accounting
+- `src/http.c` — libcurl-based HTTP POST with a spinner and ESC-interrupt polling, wraps `HttpResponse`; `http_post_json_stream()` additionally parses Server-Sent Events and dispatches each `data:` payload to a callback for live output
 - `src/tools.c` — tool schemas and implementations (`read_file` / `write_file` / `edit_file` / `list_dir` / `run_shell` / `ask_user` / `skill`) plus the interactive option menu
+- `src/strbuf.c` — the shared growable `StrBuf` byte buffer (`sb_*`) used across modules
 - `src/skills.c` — skill discovery and loading (`.lcode/skills` and the global skills directory, `SKILL.md` frontmatter)
 - `src/session.c` — session persistence: JSON store under the sessions directory, list/load/save/delete, most-recent lookup
 - `src/trust.c` — directory trust model: canonicalisation, the trusted-directory list and its config file, active root

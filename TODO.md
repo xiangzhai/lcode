@@ -19,8 +19,10 @@
 
 ## 二、网络/API 层
 
-- [ ] 流式输出（SSE）。`src/http.c:write_cb` 用 `CURLOPT_WRITEFUNCTION`
+- [x] 流式输出（SSE）。`src/http.c:write_cb` 用 `CURLOPT_WRITEFUNCTION`
       收完整 body 才解析，没有 SSE，只能看 spinner 等整段返回。体验上差距最明显。
+      已实现：`http_post_json_stream()` 按行解析 `data:` 事件，`run_turn` 边收边
+      打印思考/正文并重组流式工具调用；默认开启，`--no-stream` 可回退。
 - [ ] 重试 + 退避。429/5xx/网络抖动目前直接报错（全仓库无 retry 相关代码）。
 - [ ] 上下文管理：截断或摘要压缩。`messages` 只增不减，长会话最终会撞模型上下文上限。
 - [ ] 补全请求参数：`max_tokens`、`top_p` 等可配置项。
