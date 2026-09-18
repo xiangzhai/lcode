@@ -16,6 +16,7 @@ int trust_list(void);
 int trust_ask(const char *dir);
 int trust_add(const char *dir);
 const char *trust_matching_root(const char *dir);
+char *trust_containing_dir(const char *path);
 
 int trust_set_active(const char *dir);
 const char *trust_active_root(void);

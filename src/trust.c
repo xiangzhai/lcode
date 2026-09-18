@@ -354,6 +354,10 @@ const char *trust_active_root(void)
     return g_active_root;
 }
 
+/*
+ * Any recorded trusted directory grants access, not only the one lcode started
+ * in: directories trusted on demand during a run have to stay reachable.
+ */
 int trust_path_allowed(const char *path)
 {
     if (!g_active_root)
@@ -361,9 +365,45 @@ int trust_path_allowed(const char *path)
     char *canon = trust_canonical(path);
     if (!canon)
         return 0;
-    int ok = path_within(canon, g_active_root);
+
+    int ok = 0;
+    for (int i = 0; i < g_trusted_count && !ok; i++) {
+        if (path_within(canon, g_trusted[i]))
+            ok = 1;
+    }
     free(canon);
     return ok;
+}
+
+/*
+ * The directory to record when the user approves a path that is not covered
+ * yet: the target itself when it is a directory, otherwise its parent.
+ */
+char *trust_containing_dir(const char *path)
+{
+    char *canon = trust_canonical(path);
+    if (!canon)
+        return NULL;
+
+    struct stat st;
+    if (stat(canon, &st) == 0 && S_ISDIR(st.st_mode))
+        return canon;
+
+    char *slash = strrchr(canon, '/');
+    if (!slash) {
+        free(canon);
+        return NULL;
+    }
+    if (slash == canon)
+        canon[1] = '\0';
+    else
+        *slash = '\0';
+
+    if (stat(canon, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        free(canon);
+        return NULL;
+    }
+    return canon;
 }
 
 int trust_ask(const char *dir)

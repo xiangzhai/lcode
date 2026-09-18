@@ -20,7 +20,7 @@
   - `ask_user` — 当用户需要在多个选项中做出选择时显示交互式菜单（用方向键/数字键选择，`Enter` 确认，`q`/`Esc` 取消；在非 TTY 环境下回退为数字输入）
     - 使用 `--non-interactive`（或 `-y`）时不显示菜单；决策交还给模型，由模型自行选择并静默完成任务
 - 技能（Skills）：自动从约定目录中发现技能（`SKILL.md`），在系统提示中列出，并让模型按需通过 `skill` 工具加载技能的完整指令
-- 目录信任：lcode 在访问新目录前会先询问你是否信任，并记住你的选择；未经信任的目录绝不会被访问
+- 目录信任：lcode 在访问新目录前会先询问你是否信任，并记住你的选择；当工具访问到信任目录之外时会以同样的方式询问，未经信任的目录绝不会被访问
 
 ## 依赖
 
@@ -170,7 +170,17 @@ Trust this directory and its contents? [y/N]
 
 回答 yes 会把该目录记录到信任配置文件并允许 lcode 运行；回答 no 会中止运行，因此该目录绝不会被触碰。若某个父目录已被信任，其子目录也视为已信任，因此信任项目根目录即可覆盖其所有子目录。
 
-文件工具（`read_file`、`write_file`、`list_dir`）会拒绝任何经 `..` 或符号链接解析后落到信任目录之外的路径；当没有生效的信任目录时，`run_shell` 拒绝运行。由于 shell 命令本身仍可能访问其他地方，请仅在你愿意让 lcode 在其中运行任意命令时才信任该目录。
+文件工具（`read_file`、`write_file`、`list_dir`）会拒绝任何经 `..` 或符号链接解析后落到所有信任目录之外的路径；当没有生效的信任目录时，`run_shell` 拒绝运行。由于 shell 命令本身仍可能访问其他地方，请仅在你愿意让 lcode 在其中运行任意命令时才信任该目录。
+
+当某个工具访问到信任目录之外时，lcode 会先用与 `ask_user` 相同的菜单询问是否信任该目录，而不是直接拒绝：
+
+```
+? '$HOME/notes.txt' is outside the trusted directories. Trust '$HOME' and continue?
+  1) Yes, trust '$HOME'
+  2) No, keep refusing access
+```
+
+选择 yes 会把该目录写入信任配置文件并继续本次工具调用；选择 no 则把拒绝结果返回给模型。被信任的是包含目标的那一层目录：若目标本身是目录则为它自身，否则为其父目录。本次运行中被记录的目录之后始终可访问；只有终端才能作答，因此在非交互模式（或 `stdin` 来自管道/文件）下会跳过询问并保持拒绝。
 
 已信任目录保存在 `$LCODE_HOME/trusted.json`（设置了 `LCODE_HOME` 时），否则保存在
 `$XDG_CONFIG_HOME/lcode/trusted.json`，否则保存在 `~/.config/lcode/trusted.json`。可用 `--list-trusted` 查看。在非交互模式（`--non-interactive`）下 lcode 绝不询问；请用 `--trust` 预先信任当前目录。

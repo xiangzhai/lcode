@@ -20,7 +20,7 @@ A command-line coding agent written in C. It talks to DeepSeek's OpenAI-compatib
   - `ask_user` — show an interactive menu when the user must choose among several options (arrow/number keys to select, `Enter` to confirm, `q`/`Esc` to cancel; falls back to numbered input when not attached to a TTY)
     - With `--non-interactive` (or `-y`) no menu is shown; the decision is handed back to the model, which picks for itself and completes the task silently
 - Skills: automatically discover skills (`SKILL.md`) from convention directories, list them in the system prompt, and let the model load a skill's full instructions on demand through the `skill` tool
-- Directory trust: before touching a new directory lcode asks whether you trust it and remembers the answer; directories you have not trusted are never accessed
+- Directory trust: before touching a new directory lcode asks whether you trust it and remembers the answer; a tool that reaches outside the trusted directories asks the same way, and directories you have not trusted are never accessed
 
 ## Dependencies
 
@@ -177,9 +177,24 @@ aborts the run so the directory is never touched. A directory is also considered
 of its parents is trusted, so trusting a project root covers its subdirectories.
 
 The file tools (`read_file`, `write_file`, `list_dir`) refuse any path that resolves (through `..`
-or symlinks) outside the trusted directory, and `run_shell` refuses to run when no trusted
+or symlinks) outside every trusted directory, and `run_shell` refuses to run when no trusted
 directory is active. Because a shell command can still reach elsewhere on its own, trust a
 directory only when you are comfortable with lcode running arbitrary commands in it.
+
+A tool that reaches outside the trusted directories is offered to you before it is refused, using
+the same menu as the `ask_user` tool:
+
+```
+? '$HOME/notes.txt' is outside the trusted directories. Trust '$HOME' and continue?
+  1) Yes, trust '$HOME'
+  2) No, keep refusing access
+```
+
+Choosing yes records the directory in the trust config file and lets the tool call proceed; choosing
+no returns the refusal to the model. The directory containing the target is trusted: the target
+itself when it is a directory, otherwise its parent. Every recorded directory stays accessible for
+the rest of the run, and only a terminal can answer, so in non-interactive mode (or with `stdin`
+redirected from a file or pipe) the prompt is skipped and access stays refused.
 
 Trusted directories are stored in `$LCODE_HOME/trusted.json` when `LCODE_HOME` is set, otherwise
 `$XDG_CONFIG_HOME/lcode/trusted.json`, otherwise `~/.config/lcode/trusted.json`. Use

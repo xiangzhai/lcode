@@ -24,6 +24,10 @@
 #define MAX_READ_SIZE (512 * 1024)
 #define DISPLAY_MAX_LINES 10
 
+static int g_non_interactive = 0;
+
+static int ui_choose(const char *question, char *const *opts, int n);
+
 static const char *arg_str(json_object *args, const char *key)
 {
     json_object *v;
@@ -41,17 +45,20 @@ static char *xstrdup(const char *s)
     return s ? strdup(s) : NULL;
 }
 
+static int trust_prompt(const char *path);
+
 /*
- * Confine the file tools to the directory tree the user trusted. Paths are
+ * Confine the file tools to the directories the user trusted. Paths are
  * canonicalised (resolving symlinks and "..") before the check so neither
- * relative escapes nor symlinks can reach outside the active root.
+ * relative escapes nor symlinks can reach outside a trusted tree; a path that
+ * falls outside every one of them is offered to the user for approval first.
  */
 static char *path_guard(const char *path)
 {
     const char *root = trust_active_root();
     if (!root)
         return xstrdup("error: no trusted directory is active; refusing file access");
-    if (trust_path_allowed(path))
+    if (trust_path_allowed(path) || trust_prompt(path))
         return NULL;
 
     char *msg = NULL;
@@ -59,6 +66,52 @@ static char *path_guard(const char *path)
                  path ? path : ".", root) < 0)
         return xstrdup("error: path is outside the trusted directory");
     return msg;
+}
+
+/*
+ * A tool asked for a path outside every trusted directory: instead of refusing
+ * outright, offer to record the directory holding the target, the same way
+ * lcode asks for the working directory at startup. Answering no leaves the tree
+ * untrusted, so the access stays refused. Only a terminal can answer, which
+ * keeps non-interactive runs from blocking on a prompt.
+ */
+static int trust_prompt(const char *path)
+{
+    if (g_non_interactive || !isatty(STDIN_FILENO))
+        return 0;
+
+    char *dir = trust_containing_dir(path);
+    if (!dir)
+        return 0;
+
+    char *question = NULL, *yes = NULL, *no = NULL;
+    int built = asprintf(&question,
+                         "'%s' is outside the trusted directories. "
+                         "Trust '%s' and continue?",
+                         path ? path : ".", dir) >= 0 &&
+                asprintf(&yes, "Yes, trust '%s'", dir) >= 0 &&
+                asprintf(&no, "No, keep refusing access") >= 0;
+
+    int trusted = 0;
+    if (built) {
+        char *opts[2] = {yes, no};
+        if (ui_choose(question, opts, 2) == 0) {
+            if (trust_add(dir) == 0) {
+                printf("\033[1;33mtrusted directory: %s (saved to %s)\033[0m\n",
+                       dir, trust_config_path());
+                fflush(stdout);
+                trusted = 1;
+            } else {
+                fprintf(stderr, "error: failed to save trusted directory '%s'\n", dir);
+            }
+        }
+    }
+
+    free(question);
+    free(yes);
+    free(no);
+    free(dir);
+    return trusted;
 }
 
 typedef struct {
@@ -604,8 +657,6 @@ static char *tool_run_shell(json_object *args)
     return sb_steal(&result);
 }
 
-static int g_non_interactive = 0;
-
 void tools_set_non_interactive(int enabled)
 {
     g_non_interactive = enabled ? 1 : 0;
@@ -706,18 +757,22 @@ static char *selection_result(int idx, char *const *opts)
     return msg;
 }
 
-static char *ask_interactive(const char *question, char *const *opts, int n)
+/*
+ * Returns the selected index, -1 when the user cancels and -2 when the input
+ * is not a valid choice.
+ */
+static int ask_interactive(const char *question, char *const *opts, int n)
 {
     struct termios orig, raw;
     if (tcgetattr(STDIN_FILENO, &orig) != 0)
-        return NULL;
+        return -1;
 
     raw = orig;
     raw.c_lflag &= ~(tcflag_t)(ICANON | ECHO | ISIG);
     raw.c_cc[VMIN] = 1;
     raw.c_cc[VTIME] = 0;
     if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0)
-        return NULL;
+        return -1;
 
     int sel = 0;
     int chosen = -1;
@@ -749,12 +804,10 @@ static char *ask_interactive(const char *question, char *const *opts, int n)
     printf("\033[%dA\r\033[J", n);
     fflush(stdout);
 
-    if (chosen < 0)
-        return xstrdup("user cancelled the selection");
-    return selection_result(chosen, opts);
+    return chosen;
 }
 
-static char *ask_plain(const char *question, char *const *opts, int n)
+static int ask_plain(const char *question, char *const *opts, int n)
 {
     printf("? %s\n", question);
     for (int i = 0; i < n; i++)
@@ -764,12 +817,19 @@ static char *ask_plain(const char *question, char *const *opts, int n)
 
     char line[64];
     if (!fgets(line, sizeof(line), stdin))
-        return xstrdup("user cancelled the selection");
+        return -1;
 
     int idx = atoi(line) - 1;
     if (idx < 0 || idx >= n)
-        return xstrdup("user did not make a valid selection");
-    return selection_result(idx, opts);
+        return -2;
+    return idx;
+}
+
+static int ui_choose(const char *question, char *const *opts, int n)
+{
+    if (menu_is_tty())
+        return ask_interactive(question, opts, n);
+    return ask_plain(question, opts, n);
 }
 
 static char *tool_ask_user(json_object *args)
@@ -805,11 +865,15 @@ static char *tool_ask_user(json_object *args)
         opts[i] = (char *)json_object_get_string(o);
     }
 
-    char *result = NULL;
-    if (menu_is_tty())
-        result = ask_interactive(question, opts, n);
-    if (!result)
-        result = ask_plain(question, opts, n);
+    int choice = ui_choose(question, opts, n);
+
+    char *result;
+    if (choice == -1)
+        result = xstrdup("user cancelled the selection");
+    else if (choice == -2)
+        result = xstrdup("user did not make a valid selection");
+    else
+        result = selection_result(choice, opts);
 
     free(opts);
     return result;

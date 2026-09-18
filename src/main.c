@@ -107,8 +107,9 @@ static void usage(const char *prog)
             "     DEEPSEEK_THINKING, DEEPSEEK_REASONING_EFFORT, LCODE_HOME\n"
             "note: AGENTS.md in the current directory is auto-appended to the system prompt\n"
             "note: skills are discovered in .lcode/skills and $LCODE_HOME/skills\n"
-            "note: lcode only accesses directories you have trusted; it asks once per\n"
-            "      directory and remembers the answer in the trust config file\n",
+            "note: lcode only accesses directories you have trusted; it asks per\n"
+            "      directory (at startup and when a tool reaches outside) and saves\n"
+            "      the answer in the trust config file\n",
             prog);
 }
 
