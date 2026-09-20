@@ -13,6 +13,7 @@ A command-line coding agent written in C. It talks to DeepSeek's OpenAI-compatib
 - Streaming output: responses are streamed over Server-Sent Events, so text appears token by token as the model generates it (disable with `--no-stream`)
 - Token usage stats: after each request, prompt / completion / total and the cache hit rate are printed to stderr; use `/usage` for the running total
 - Function calling loop: the model can call multiple tools in a row
+- Parallel tool calls: when the model returns several independent tool calls in one message, the ones that cannot touch the terminal (`read_file`, `list_dir`, `write_file`, `edit_file`, `skill`) run concurrently in worker threads; `run_shell` and `ask_user` stay on the main thread so prompts and streamed shell output remain readable, and two calls that touch the same path are kept in order
 - Built-in tools:
   - `read_file` — read a text file
   - `write_file` — write (overwrite) a text file

@@ -12,8 +12,13 @@
       里的 `grep`/`find`，跨平台不可靠、输出也难控。
 - [ ] `read_file` 支持分页：`MAX_READ_SIZE (512KB)` 截断且没有 `offset`/`limit`
       参数（`src/tools.c`），大文件读不全。
-- [ ] 并行执行工具调用。`run_turn` 里是串行 `for (t = 0; t < n; t++)`
+- [x] 并行执行工具调用。`run_turn` 里是串行 `for (t = 0; t < n; t++)`
       （`src/agent.c`），模型一次返回多个工具会一个个跑。
+      已实现：`tools_execute_batch()`（`src/tools.c`）把一条 assistant 消息里的工具调用
+      分组执行——`read_file` / `list_dir` / `write_file` / `edit_file` / `skill` 且目标
+      路径已在信任目录内（不会弹信任菜单）的调用放入工作线程并发跑（上限 8 个），
+      `run_shell`、`ask_user` 以及会触发信任询问、路径与其他调用冲突的调用留在主线程
+      按原顺序执行；结果按原顺序回填并打印。
 - [x] 给 `run_shell` 加超时。目前只有 curl 的 600s，命令卡死只能靠 ESC/SIGINT
       （`src/tools.c:tool_run_shell`）。
       已实现：`--shell-timeout` / `LCODE_SHELL_TIMEOUT` 设置默认超时（默认 120s，
@@ -51,7 +56,7 @@
 
 ## 六、安全
 
-- [ ] 信任策略：目录被信任后 `run_shell` 无任何策略，`rm -rf`、`curl | sh`
+- [x] 信任策略：目录被信任后 `run_shell` 无任何策略，`rm -rf`、`curl | sh`
       都不经确认；目录级信任粒度偏粗。
 - [ ] 加 `--untrust` 撤销命令（目前只有 `--list-trusted`）。
 - [ ] 统一提示风格：启动信任用 `[y/N]` 文本（`src/trust.c:trust_ask`），

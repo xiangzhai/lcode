@@ -9,7 +9,7 @@ Update AGENTS.md to match the actual code.
 - `src/main.c` — entry point: environment and command-line argument parsing, `--list-*` modes, the directory-trust check, and `AGENTS.md` auto-loading
 - `src/agent.c` — system prompt and message construction, the REPL and tool-calling main loop, session commands (`/new`, `/switch`, ...), DeepSeek thinking mode, SSE delta reassembly, and token-usage accounting
 - `src/http.c` — libcurl-based HTTP POST with a spinner and ESC-interrupt polling, wraps `HttpResponse`; `http_post_json_stream()` additionally parses Server-Sent Events and dispatches each `data:` payload to a callback for live output
-- `src/tools.c` — tool schemas and implementations (`read_file` / `write_file` / `edit_file` / `list_dir` / `run_shell` / `ask_user` / `skill`) plus the interactive option menu; `run_shell` is gated by the shell command policy and confirms or refuses destructive commands
+- `src/tools.c` — tool schemas and implementations (`read_file` / `write_file` / `edit_file` / `list_dir` / `run_shell` / `ask_user` / `skill`) plus the interactive option menu; `run_shell` is gated by the shell command policy and confirms or refuses destructive commands; `tools_execute_batch()` runs the independent calls from one assistant message concurrently while terminal-facing calls stay on the main thread
 - `src/policy.c` — shell command policy for `run_shell`: tokenises a command, classifies it as safe / risky / forbidden, and stores remembered approvals (per exact command or per kind of command) in `permissions.json`
 - `src/strbuf.c` — the shared growable `StrBuf` byte buffer (`sb_*`) used across modules
 - `src/skills.c` — skill discovery and loading (`.lcode/skills` and the global skills directory, `SKILL.md` frontmatter)
@@ -37,6 +37,7 @@ Update AGENTS.md to match the actual code.
 - Directory trust decides *where* lcode may work; the shell command policy decides *what* a `run_shell` command may do. `policy_check()` classifies each command (see `src/policy.c`): forbidden commands are refused outright, risky ones are confirmed, and approvals can be remembered. Confirmed commands are refused in non-interactive mode unless a rule already allows them (or `--allow-dangerous` is passed).
 - Persistent state lives under `LCODE_HOME` when set, otherwise the XDG paths: sessions in `<data>/lcode/sessions`, skills in `<data>/lcode/skills`, trusted dirs in `<config>/lcode/trusted.json`, shell command permissions in `<config>/lcode/permissions.json`.
 - Tools: `read_file`, `write_file`, `edit_file`, `list_dir`, `run_shell`, `ask_user`, and `skill`. `run_shell` streams output from a reader thread and kills the whole process group on interrupt.
+- Tool calls from one assistant message run through `tools_execute_batch()` in `src/tools.c`: calls that cannot touch the terminal run concurrently (up to 8 worker threads), while `run_shell`/`ask_user`, calls that may raise a trust prompt, and calls whose path collides with another call's stay on the main thread in order. Results are filled back in the original order; a tool must not print to the terminal unless it also runs on the main thread.
 
 ## Code conventions
 

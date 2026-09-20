@@ -465,17 +465,6 @@ static int handle_command(AgentConfig *cfg, char **session_name,
     return 0;
 }
 
-static void add_interrupted_tool(json_object *messages, json_object *tc)
-{
-    const char *id = json_string_at(tc, "id");
-    json_object *tm = json_object_new_object();
-    json_object_object_add(tm, "role", json_object_new_string("tool"));
-    json_object_object_add(tm, "tool_call_id", json_object_new_string(id ? id : ""));
-    json_object_object_add(tm, "content",
-                           json_object_new_string("error: interrupted by user"));
-    json_object_array_add(messages, tm);
-}
-
 /*
  * Streaming (SSE) reassembly. The API splits one assistant message across many
  * deltas: content and reasoning arrive as text fragments, and tool calls arrive
@@ -853,16 +842,16 @@ static int run_turn(AgentConfig *cfg, json_object *messages, const char *url,
             return TURN_OK;
 
         int n = (int)json_object_array_length(tool_calls);
+        ToolCallJob *jobs = calloc((size_t)n, sizeof(*jobs));
+        if (!jobs) {
+            fprintf(stderr, "error: out of memory\n");
+            return TURN_ERROR;
+        }
+
+        /* Independent calls run concurrently, so every call is announced first
+           and the results are printed afterwards in the original order. */
         for (int t = 0; t < n; t++) {
             json_object *tc = json_object_array_get_idx(tool_calls, t);
-
-            if (interrupt_pending()) {
-                for (; t < n; t++)
-                    add_interrupted_tool(messages, json_object_array_get_idx(tool_calls, t));
-                return TURN_INTERRUPTED;
-            }
-
-            const char *id = json_string_at(tc, "id");
             const char *name = NULL;
             const char *args_str = "{}";
 
@@ -874,22 +863,39 @@ static int run_turn(AgentConfig *cfg, json_object *messages, const char *url,
                     args_str = a;
             }
 
-            json_object *args = json_tokener_parse(args_str);
-            print_tool_call(name, args_str, args);
-            char *result = tools_execute(name, args);
-            if (args)
-                json_object_put(args);
+            jobs[t].name = name;
+            jobs[t].args = json_tokener_parse(args_str);
+            print_tool_call(name, args_str, jobs[t].args);
+        }
 
-            if (!tools_output_streamed())
-                print_tool_result(result);
+        int executed = tools_execute_batch(jobs, n);
+
+        for (int t = 0; t < n; t++) {
+            json_object *tc = json_object_array_get_idx(tool_calls, t);
+            const char *id = json_string_at(tc, "id");
+            const char *content = "error: interrupted by user";
+            char *result = jobs[t].result;
+
+            if (t < executed) {
+                if (!jobs[t].streamed)
+                    print_tool_result(result);
+                content = result ? result : "";
+            }
 
             json_object *tm = json_object_new_object();
             json_object_object_add(tm, "role", json_object_new_string("tool"));
             json_object_object_add(tm, "tool_call_id", json_object_new_string(id ? id : ""));
-            json_object_object_add(tm, "content", json_object_new_string(result ? result : ""));
+            json_object_object_add(tm, "content", json_object_new_string(content));
             json_object_array_add(messages, tm);
+
+            if (jobs[t].args)
+                json_object_put(jobs[t].args);
             free(result);
         }
+        free(jobs);
+
+        if (executed < n)
+            return TURN_INTERRUPTED;
     }
 }
 

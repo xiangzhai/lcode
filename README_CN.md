@@ -13,6 +13,10 @@
 - 流式输出：响应通过 Server-Sent Events 流式返回，正文会随模型逐 token 生成而实时显示（可用 `--no-stream` 关闭）
 - Token 用量统计：每次请求后会把 prompt / completion / total 以及缓存命中率打印到 stderr；使用 `/usage` 查看累计值
 - 函数调用循环：模型可以连续调用多个工具
+- 并行工具调用：当模型在一条消息中返回多个相互独立的工具调用时，不接触终端的那些
+  （`read_file`、`list_dir`、`write_file`、`edit_file`、`skill`）会在工作线程中并发执行；
+  `run_shell` 与 `ask_user` 仍在主线程上运行，以保证提示菜单和流式 shell 输出可读，
+  两个访问同一路径的调用也会保持先后顺序
 - 内置工具：
   - `read_file` — 读取文本文件
   - `write_file` — 写入（覆盖）文本文件

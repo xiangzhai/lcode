@@ -25,6 +25,7 @@
 #define MAX_READ_SIZE (512 * 1024)
 #define MAX_EDIT_SIZE (16 * 1024 * 1024)
 #define DISPLAY_MAX_LINES 10
+#define MAX_PARALLEL_TOOLS 8
 
 static int g_non_interactive = 0;
 static int g_shell_timeout = SHELL_TIMEOUT_DEFAULT;
@@ -571,7 +572,8 @@ static void shell_job_kill(pid_t pid)
         kill(pid, SIGKILL);
 }
 
-static int g_last_output_streamed = 0;
+/* Per-thread so concurrent tool calls cannot clobber each other's flag. */
+static _Thread_local int g_last_output_streamed = 0;
 
 static volatile sig_atomic_t g_shell_signaled = 0;
 
@@ -1129,6 +1131,157 @@ char *tools_execute(const char *name, json_object *args)
     if (asprintf(&msg, "error: unknown tool '%s'", name) < 0)
         return xstrdup("error: unknown tool");
     return msg;
+}
+
+/* Calls that modify a file; two of them writing the same path must not overlap. */
+static int job_is_writer(const char *name)
+{
+    return name && (strcmp(name, "write_file") == 0 || strcmp(name, "edit_file") == 0);
+}
+
+/* Canonical target path of a file tool, or NULL for calls that hold no path. */
+static char *job_path_key(const ToolCallJob *job)
+{
+    const char *name = job->name;
+    if (!name)
+        return NULL;
+    if (strcmp(name, "read_file") != 0 && strcmp(name, "write_file") != 0 &&
+        strcmp(name, "edit_file") != 0 && strcmp(name, "list_dir") != 0)
+        return NULL;
+
+    const char *path = arg_str(job->args, "path");
+    return trust_canonical(path && *path ? path : ".");
+}
+
+/*
+ * Which calls may share a batch of worker threads. run_shell and ask_user drive
+ * the terminal (streamed output, raw-mode ESC polling, confirmation menus), and
+ * a file tool whose path is outside the trusted directories may raise a trust
+ * prompt, so all of those stay on the calling thread. read_file, list_dir and
+ * skill are pure reads; write_file and edit_file join a batch as long as no
+ * other call in it touches the same path.
+ */
+static int job_is_parallel_safe(const ToolCallJob *job)
+{
+    const char *name = job->name;
+    if (!name)
+        return 0;
+    if (strcmp(name, "read_file") == 0 || strcmp(name, "write_file") == 0 ||
+        strcmp(name, "edit_file") == 0 || strcmp(name, "list_dir") == 0) {
+        const char *path = arg_str(job->args, "path");
+        return trust_path_allowed(path && *path ? path : ".");
+    }
+    if (strcmp(name, "skill") == 0)
+        return 1;
+    return 0;
+}
+
+/*
+ * Whether adding cand to a group would race with one of its members: two calls
+ * that touch the same path where at least one of them writes.
+ */
+static int job_conflicts(const ToolCallJob *cand, const ToolCallJob *group, int n)
+{
+    char *key = job_path_key(cand);
+    if (!key)
+        return 0;
+
+    int conflict = 0;
+    for (int i = 0; i < n && !conflict; i++) {
+        if (!job_is_writer(cand->name) && !job_is_writer(group[i].name))
+            continue;
+        char *other = job_path_key(&group[i]);
+        if (other && strcmp(other, key) == 0)
+            conflict = 1;
+        free(other);
+    }
+    free(key);
+    return conflict;
+}
+
+static void job_run_one(ToolCallJob *job)
+{
+    job->result = tools_execute(job->name, job->args);
+    job->streamed = tools_output_streamed();
+}
+
+typedef struct {
+    ToolCallJob *jobs;
+    int n;
+    int next;
+    pthread_mutex_t lock;
+} BatchState;
+
+static void *batch_worker(void *arg)
+{
+    BatchState *state = arg;
+    for (;;) {
+        pthread_mutex_lock(&state->lock);
+        int i = state->next < state->n ? state->next++ : -1;
+        pthread_mutex_unlock(&state->lock);
+        if (i < 0)
+            break;
+        job_run_one(&state->jobs[i]);
+    }
+    return NULL;
+}
+
+/* Run one group of independent calls with a bounded number of worker threads. */
+static void batch_run_group(ToolCallJob *jobs, int n)
+{
+    if (n <= 1) {
+        job_run_one(&jobs[0]);
+        return;
+    }
+
+    BatchState state;
+    state.jobs = jobs;
+    state.n = n;
+    state.next = 0;
+    pthread_mutex_init(&state.lock, NULL);
+
+    int wanted = n < MAX_PARALLEL_TOOLS ? n : MAX_PARALLEL_TOOLS;
+    pthread_t th[MAX_PARALLEL_TOOLS];
+    int created = 0;
+    for (; created < wanted; created++) {
+        if (pthread_create(&th[created], NULL, batch_worker, &state) != 0)
+            break;
+    }
+
+    if (created == 0) {
+        /* No thread could be started: fall back to running everything here. */
+        for (int i = 0; i < n; i++)
+            job_run_one(&jobs[i]);
+    } else {
+        batch_worker(&state); /* the caller pulls work too */
+        for (int i = 0; i < created; i++)
+            pthread_join(th[i], NULL);
+    }
+
+    pthread_mutex_destroy(&state.lock);
+}
+
+int tools_execute_batch(ToolCallJob *jobs, int n)
+{
+    int i = 0;
+    while (i < n) {
+        if (interrupt_pending())
+            break;
+
+        if (!job_is_parallel_safe(&jobs[i])) {
+            job_run_one(&jobs[i]);
+            i++;
+            continue;
+        }
+
+        int j = i + 1;
+        while (j < n && job_is_parallel_safe(&jobs[j]) &&
+               !job_conflicts(&jobs[j], jobs + i, j - i))
+            j++;
+        batch_run_group(jobs + i, j - i);
+        i = j;
+    }
+    return i;
 }
 
 static json_object *prop(const char *type, const char *desc)
