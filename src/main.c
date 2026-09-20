@@ -109,6 +109,8 @@ static void usage(const char *prog)
             "  --no-thinking               disable thinking mode\n"
             "  --reasoning-effort <level>  thinking effort: minimal|low|medium|high|xhigh|max|ultra\n"
             "                              (default: high)\n"
+            "  --show-reasoning            print the model's reasoning instead of a live\n"
+            "                              'thinking' status line (hidden by default)\n"
             "  --max-iterations <n>        print a notice every n tool-call rounds; the turn\n"
             "                              runs until the model stops (0 = unlimited, default)\n"
             "  --shell-timeout <seconds>   kill a run_shell command that runs longer than this\n"
@@ -215,6 +217,7 @@ int main(int argc, char **argv)
     }
     cfg.stream = 1;
     cfg.thinking = 1;
+    cfg.show_reasoning = 0;
     cfg.reasoning_effort = env_or("DEEPSEEK_REASONING_EFFORT", "high");
 
     cfg.context_max_tokens = DEFAULT_CONTEXT_TOKENS;
@@ -314,6 +317,8 @@ int main(int argc, char **argv)
             cfg.thinking = 1;
         } else if (strcmp(argv[i], "--no-thinking") == 0) {
             cfg.thinking = 0;
+        } else if (strcmp(argv[i], "--show-reasoning") == 0) {
+            cfg.show_reasoning = 1;
         } else if (strcmp(argv[i], "--reasoning-effort") == 0 && i + 1 < argc) {
             cfg.reasoning_effort = argv[++i];
         } else if (strcmp(argv[i], "--max-iterations") == 0 && i + 1 < argc) {

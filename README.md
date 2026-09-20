@@ -9,8 +9,8 @@ A command-line coding agent written in C. It talks to DeepSeek's OpenAI-compatib
 - Interactive REPL with multi-turn context
 - Interruptible at any time: press `ESC` while a model request or a tool execution is in flight to abort the current turn, then type a new instruction to steer the model in a different direction
 - Session management: sessions are persisted to disk as JSON and can be named, resumed, listed, and switched
-- DeepSeek thinking mode: enabled by default, with a configurable `--reasoning-effort` level; the model's reasoning is printed in dim text as `[thinking]`
-- Streaming output: responses are streamed over Server-Sent Events, so thinking and text appear token by token as the model generates them (disable with `--no-stream`)
+- DeepSeek thinking mode: enabled by default, with a configurable `--reasoning-effort` level; while the model reasons, a `thinking...` status line refreshes in place (pass `--show-reasoning` to print the reasoning text instead)
+- Streaming output: responses are streamed over Server-Sent Events, so text appears token by token as the model generates it (disable with `--no-stream`)
 - Token usage stats: after each request, prompt / completion / total and the cache hit rate are printed to stderr; use `/usage` for the running total
 - Context management: the conversation is compacted when the estimated prompt size exceeds a budget, so a long session never overruns the model's context window; the oldest messages are summarized by the model (or dropped) while the system prompt and the most recent exchanges are kept
 - Function calling loop: the model can call multiple tools in a row
@@ -145,6 +145,8 @@ Command-line options (these override the corresponding environment variables):
 --no-thinking                      disable thinking mode
 --reasoning-effort <level>         thinking effort: minimal|low|medium|high|xhigh|max|ultra
                                    (default: high)
+--show-reasoning                   print the model's reasoning content instead of the
+                                   live 'thinking...' status line
 --max-iterations <n>               print a notice every n tool-call rounds; a turn keeps
                                    running until the model stops calling tools (0 = unlimited,
                                    the default)
@@ -384,10 +386,12 @@ prompt cache prefix (the history it was built on has changed).
 ## Thinking mode
 
 lcode enables DeepSeek's thinking mode by default. When it is on, each request sends a `thinking`
-field (`{"type": "enabled"}`) and an optional `reasoning_effort` level, and any `reasoning_content`
-returned by the model is printed in dim text prefixed with `[thinking]` (temperature is left at the
-API default). When thinking is disabled, lcode instead sends `{"type": "disabled"}` and a fixed
-`temperature` of `0.2`.
+field (`{"type": "enabled"}`) and an optional `reasoning_effort` level, and the model's
+`reasoning_content` is kept out of the way: instead of scrolling the whole chain of thought past you,
+lcode keeps a single `thinking...` status line that refreshes in place until the answer (or a tool
+call) starts, then clears it. Pass `--show-reasoning` to print the reasoning in dim text prefixed
+with `[thinking]` instead (temperature is left at the API default). When thinking is disabled, lcode
+instead sends `{"type": "disabled"}` and a fixed `temperature` of `0.2`.
 
 Toggle it with `--thinking` / `--no-thinking` or the `DEEPSEEK_THINKING` environment variable, and
 choose the effort with `--reasoning-effort <level>` (or `DEEPSEEK_REASONING_EFFORT`). Valid levels are
@@ -397,8 +401,10 @@ level is rejected at startup.
 ## Streaming output
 
 By default lcode requests the response as a Server-Sent Events stream and prints the
-model's thinking and text as soon as the tokens arrive, instead of waiting for the whole
-reply. The token-usage stats at the end of a turn still come from the final stream chunk.
+model's text as soon as the tokens arrive, instead of waiting for the whole
+reply. While the model is thinking, a `thinking...` status line refreshes in place instead of
+streaming the chain of thought (see [Thinking mode](#thinking-mode)). The token-usage stats at the
+end of a turn still come from the final stream chunk.
 Pass `--no-stream` to fall back to buffering the complete response before printing it,
 which is useful for endpoints or proxies that do not support SSE.
 

@@ -11,6 +11,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
 #include <readline/history.h>
 #include <readline/readline.h>
 
@@ -604,6 +606,10 @@ typedef struct {
     int reasoning_started;
     int content_started;
     int got_reasoning;
+    int show_reasoning;
+    int think_shown;
+    int think_frame;
+    struct timespec think_start;
 } StreamState;
 
 static ToolCallAcc *stream_call(StreamState *st, int index)
@@ -656,6 +662,38 @@ static void stream_apply_tool_delta(StreamState *st, json_object *tc)
     }
 }
 
+/*
+ * While the model is only producing reasoning, keep the screen to a single
+ * status line that refreshes in place instead of scrolling the whole chain of
+ * thought past the user. It is cleared as soon as real content or a tool call
+ * has something to show.
+ */
+static void stream_show_thinking(StreamState *st)
+{
+    if (st->content_started || !isatty(STDOUT_FILENO))
+        return;
+
+    static const char frames[] = "|/-\\";
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    double secs = (double)(now.tv_sec - st->think_start.tv_sec) +
+                  (double)(now.tv_nsec - st->think_start.tv_nsec) / 1e9;
+
+    fprintf(stdout, "\r\033[2K\033[0;36m%c thinking... %.1fs\033[0m",
+            frames[st->think_frame++ & 3], secs);
+    fflush(stdout);
+    st->think_shown = 1;
+}
+
+static void stream_clear_thinking(StreamState *st)
+{
+    if (!st->think_shown)
+        return;
+    fputs("\r\033[2K", stdout);
+    fflush(stdout);
+    st->think_shown = 0;
+}
+
 static void stream_apply_delta(StreamState *st, json_object *delta)
 {
     json_object *v;
@@ -664,12 +702,16 @@ static void stream_apply_delta(StreamState *st, json_object *delta)
         json_object_get_type(v) == json_type_string) {
         const char *s = json_object_get_string(v);
         if (*s) {
-            if (!st->reasoning_started) {
-                printf("\n\033[0;90m[thinking]\033[0m\n");
-                st->reasoning_started = 1;
+            if (st->show_reasoning) {
+                if (!st->reasoning_started) {
+                    printf("\n\033[0;90m[thinking]\033[0m\n");
+                    st->reasoning_started = 1;
+                }
+                printf("\033[0;90m%s\033[0m", s);
+                fflush(stdout);
+            } else {
+                stream_show_thinking(st);
             }
-            printf("\033[0;90m%s\033[0m", s);
-            fflush(stdout);
             sb_add(&st->reasoning, s);
             st->got_reasoning = 1;
         }
@@ -679,6 +721,7 @@ static void stream_apply_delta(StreamState *st, json_object *delta)
         json_object_get_type(v) == json_type_string) {
         const char *s = json_object_get_string(v);
         if (*s) {
+            stream_clear_thinking(st);
             if (!st->content_started) {
                 printf("\n");
                 st->content_started = 1;
@@ -773,8 +816,14 @@ static void stream_state_free(StreamState *st)
     memset(st, 0, sizeof(*st));
 }
 
-static void stream_end_line(const StreamState *st)
+static void stream_end_line(StreamState *st)
 {
+    if (st->think_shown) {
+        stream_clear_thinking(st);
+        fputc('\n', stdout);
+        fflush(stdout);
+        return;
+    }
     if (st->reasoning_started || st->content_started) {
         fputc('\n', stdout);
         fflush(stdout);
@@ -805,6 +854,8 @@ static int run_turn(AgentConfig *cfg, json_object **messagesp, const char *url,
         if (cfg->stream) {
             StreamState st;
             memset(&st, 0, sizeof(st));
+            st.show_reasoning = cfg->show_reasoning;
+            clock_gettime(CLOCK_MONOTONIC, &st.think_start);
 
             HttpResponse res = http_post_json_stream(url, cfg->api_key, body,
                                                      stream_on_event, &st);
@@ -887,7 +938,7 @@ static int run_turn(AgentConfig *cfg, json_object **messagesp, const char *url,
                 return TURN_ERROR;
             }
 
-            if (cfg->thinking)
+            if (cfg->thinking && cfg->show_reasoning)
                 print_reasoning(json_string_at(m, "reasoning_content"));
 
             const char *text = json_string_at(m, "content");

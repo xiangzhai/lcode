@@ -9,8 +9,8 @@
 - 带多轮上下文的交互式 REPL
 - 随时可中断：在模型请求或工具执行过程中按 `ESC` 即可中止当前轮次，然后输入新的指示让模型转向其他方向
 - 会话管理：会话以 JSON 形式持久化到磁盘，可命名、恢复、列出与切换
-- DeepSeek 思考模式：默认开启，可通过 `--reasoning-effort` 配置强度；模型的思考内容会以暗淡文本前缀 `[thinking]` 打印
-- 流式输出：响应通过 Server-Sent Events 流式返回，思考与正文会随模型逐 token 生成而实时显示（可用 `--no-stream` 关闭）
+- DeepSeek 思考模式：默认开启，可通过 `--reasoning-effort` 配置强度；模型思考时会用一行原地刷新的 `thinking...` 状态提示（传入 `--show-reasoning` 可改为打印思考内容）
+- 流式输出：响应通过 Server-Sent Events 流式返回，正文会随模型逐 token 生成而实时显示（可用 `--no-stream` 关闭）
 - Token 用量统计：每次请求后会把 prompt / completion / total 以及缓存命中率打印到 stderr；使用 `/usage` 查看累计值
 - 上下文管理：当估算的 prompt 体积超过预算时自动压缩历史，长会话不会撞上模型上下文上限；较早的消息由模型摘要（或直接丢弃），系统提示词与最近的若干轮对话始终保留
 - 函数调用循环：模型可以连续调用多个工具
@@ -142,6 +142,8 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxx
 --no-thinking                      关闭思考模式
 --reasoning-effort <level>         思考强度：minimal|low|medium|high|xhigh|max|ultra
                                    （默认：high）
+--show-reasoning                   打印模型的思考内容，而不是原地刷新的
+                                   'thinking...' 状态提示
 --max-iterations <n>               每 n 轮工具调用打印一次提示；一个轮次会持续
                                    运行，直到模型不再调用工具（0 = 不限，默认值）
 --shell-timeout <seconds>          杀掉运行时间超过该秒数的 run_shell 命令
@@ -347,9 +349,11 @@ description: Fill in and validate PDF forms
 ## 思考模式
 
 lcode 默认开启 DeepSeek 的思考模式。开启时，每次请求会发送 `thinking` 字段
-（`{"type": "enabled"}`）以及可选的 `reasoning_effort` 强度，模型返回的 `reasoning_content`
-会以暗淡文本、前缀 `[thinking]` 的形式打印（temperature 保持 API 默认值）。关闭思考模式时，
-lcode 改为发送 `{"type": "disabled"}` 并使用固定的 `temperature` `0.2`。
+（`{"type": "enabled"}`）以及可选的 `reasoning_effort` 强度；模型的 `reasoning_content`
+默认不会打印出来：思考期间 lcode 只保留一行原地刷新的 `thinking...` 状态提示，避免整段思维链
+刷屏，等正文（或工具调用）开始时再清除。传入 `--show-reasoning` 则改为以暗淡文本、前缀
+`[thinking]` 的形式打印思考内容（temperature 保持 API 默认值）。关闭思考模式时，lcode 改为发送
+`{"type": "disabled"}` 并使用固定的 `temperature` `0.2`。
 
 可用 `--thinking` / `--no-thinking` 或环境变量 `DEEPSEEK_THINKING` 开关，用
 `--reasoning-effort <level>`（或 `DEEPSEEK_REASONING_EFFORT`）选择强度。有效取值为
@@ -358,8 +362,10 @@ lcode 改为发送 `{"type": "disabled"}` 并使用固定的 `temperature` `0.2`
 
 ## 流式输出
 
-默认情况下，lcode 会以 Server-Sent Events 流式请求响应，模型的思考与正文会在 token 到达时立即打印，
-而不是等待整段回复完成。每轮结束时的 token 用量统计仍取自流式响应的最后一个数据块。传入
+默认情况下，lcode 会以 Server-Sent Events 流式请求响应，正文会在 token 到达时立即打印，
+而不是等待整段回复完成。模型思考期间只会显示一行原地刷新的 `thinking...` 状态提示，而不是
+把思维链逐字刷出来（见 [思考模式](#思考模式)）。每轮结束时的 token 用量统计仍取自流式响应的
+最后一个数据块。传入
 `--no-stream` 可回退为先缓冲完整响应再打印，适用于不支持 SSE 的服务端或代理。
 
 ## Shell 命令超时

@@ -14,6 +14,7 @@ typedef struct {
     int shell_timeout;             /* default run_shell timeout in seconds, 0 = disabled */
     int stream;                    /* 1 = stream the response over SSE, 0 = buffer it */
     int thinking;                  /* 1 = DeepSeek thinking mode, 0 = disabled */
+    int show_reasoning;            /* 1 = print the reasoning text, 0 = show a thinking indicator */
     const char *reasoning_effort;  /* low / medium / high / max ... */
     long context_max_tokens;       /* prompt budget before history is compacted, 0 = off */
     int context_keep_recent;       /* messages kept when compacting */
