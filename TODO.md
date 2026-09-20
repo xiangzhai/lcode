@@ -27,12 +27,7 @@
       已实现：`http_post_json_stream()` 按行解析 `data:` 事件，`run_turn` 边收边
       打印思考/正文并重组流式工具调用；默认开启，`--no-stream` 可回退。
 - [ ] 重试 + 退避。429/5xx/网络抖动目前直接报错（全仓库无 retry 相关代码）。
-- [x] 上下文管理：截断或摘要压缩。`messages` 只增不减，长会话最终会撞模型上下文上限。
-      已实现：新增 `src/context.c`，每次请求前估算 prompt token 数，超过
-      `--context-tokens`（默认 60000，0 关闭）时保留系统提示词与最近
-      `--context-keep`（默认 8）条消息，绝不拆开 tool_call 与其结果；默认
-      `--context-strategy summarize` 让模型对将丢弃的消息做摘要（失败则回退为截断），
-      `truncate` 则直接丢弃。
+- [ ] 上下文管理：截断或摘要压缩。`messages` 只增不减，长会话最终会撞模型上下文上限。
 - [ ] 补全请求参数：`max_tokens`、`top_p` 等可配置项。
 
 ## 三、可靠性与可脚本化

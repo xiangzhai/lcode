@@ -21,7 +21,6 @@ pkg_check_modules(JSONC REQUIRED IMPORTED_TARGET json-c)
 add_executable(lcode
   src/main.c
   src/agent.c
-  src/context.c
   src/http.c
   src/tools.c
   src/session.c
@@ -59,15 +58,4 @@ if(LCODE_BUILD_TESTS)
   target_link_libraries(test_policy PRIVATE PkgConfig::JSONC)
 
   add_test(NAME policy COMMAND test_policy)
-
-  add_executable(test_context
-    test/test_context.c
-    src/context.c
-  )
-  target_include_directories(test_context PRIVATE include)
-  target_compile_definitions(test_context PRIVATE _GNU_SOURCE)
-  target_compile_options(test_context PRIVATE -Wall -Wextra -Wno-unused-parameter)
-  target_link_libraries(test_context PRIVATE PkgConfig::JSONC)
-
-  add_test(NAME context COMMAND test_context)
 endif()
