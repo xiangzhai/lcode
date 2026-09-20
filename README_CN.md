@@ -336,12 +336,7 @@ description: Fill in and validate PDF forms
 在真实窗口大小之下留出余量。对应环境变量为 `LCODE_CONTEXT_TOKENS` / `LCODE_CONTEXT_KEEP` /
 `LCODE_CONTEXT_STRATEGY`。
 
-压缩时会打印一条暗淡提示，例如：
-
-```
-[context] prompt over 60000 tokens, summarizing older messages...
-[context] dropped 42 older messages, now ~12000 tokens
-```
+压缩过程是静默的：不会打印任何提示，只会体现在 token 用量上。
 
 与 `run_shell` 一样，摘要请求也会计入 token 用量，并会短暂使 prompt 缓存前缀失效（其依赖的历史
 已经改变）。

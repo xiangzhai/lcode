@@ -318,17 +318,7 @@ static void context_maybe_compact(AgentConfig *cfg, json_object **messages, cons
     cc.summarize = cfg->context_summarize;
     SummarizeCtx sc = { cfg, url };
 
-    fprintf(stderr,
-            "\033[1;33m[context]\033[0m prompt over %ld tokens, %s older messages...\n",
-            cfg->context_max_tokens,
-            cfg->context_summarize ? "summarizing" : "truncating");
-
-    int dropped = context_compact(messages, &cc, summarize_prefix, &sc);
-    if (dropped > 0)
-        fprintf(stderr,
-                "\033[1;33m[context]\033[0m dropped %d older message%s, now ~%ld tokens\n",
-                dropped, dropped == 1 ? "" : "s",
-                context_estimate_tokens(*messages));
+    context_compact(messages, &cc, summarize_prefix, &sc);
 }
 
 static json_object *merge_loaded_messages(AgentConfig *cfg, json_object *loaded)

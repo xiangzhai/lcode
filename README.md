@@ -373,12 +373,7 @@ The estimate is a heuristic — ASCII text at roughly four characters per token,
 at roughly one token each — so leave some headroom below the real window size. The same value can
 be set with `LCODE_CONTEXT_TOKENS` / `LCODE_CONTEXT_KEEP` / `LCODE_CONTEXT_STRATEGY`.
 
-A compaction prints a dim notice, for example:
-
-```
-[context] prompt over 60000 tokens, summarizing older messages...
-[context] dropped 42 older messages, now ~12000 tokens
-```
+Compaction is silent: it prints nothing, and only shows up in the token usage.
 
 As with `run_shell`, the summarization request counts toward token usage and briefly invalidates the
 prompt cache prefix (the history it was built on has changed).
