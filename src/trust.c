@@ -242,6 +242,10 @@ int trust_load(void)
     list_clear();
 
     const char *path = trust_config_path();
+    struct stat st;
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode))
+        return 0;
+
     json_object *root = json_object_from_file(path);
     if (!root)
         return 0;

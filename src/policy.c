@@ -733,7 +733,12 @@ int policy_load(void)
 {
     rules_clear();
 
-    json_object *root = json_object_from_file(policy_config_path());
+    const char *path = policy_config_path();
+    struct stat st;
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode))
+        return 0;
+
+    json_object *root = json_object_from_file(path);
     if (!root)
         return 0;
 
