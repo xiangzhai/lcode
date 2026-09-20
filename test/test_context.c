@@ -59,11 +59,11 @@ static int test_noop_under_budget(void)
     add(m, "user", "hi");
 
     ContextConfig cc = { 100000, 4, 1 };
-    int dropped = context_compact(m, &cc, NULL, NULL);
+    int dropped = context_compact(&m, &cc, NULL, NULL);
     int fails = (dropped != 0) || (json_object_array_length(m) != 2);
 
     ContextConfig off = { 0, 4, 1 };
-    int dropped_off = context_compact(m, &off, NULL, NULL);
+    int dropped_off = context_compact(&m, &off, NULL, NULL);
     if (dropped_off != 0 || json_object_array_length(m) != 2)
         fails++;
 
@@ -87,7 +87,7 @@ static int test_truncate(void)
     int n0 = (int)json_object_array_length(m);
     long before = context_estimate_tokens(m);
     ContextConfig cc = { 300, 4, 0 };
-    int dropped = context_compact(m, &cc, NULL, NULL);
+    int dropped = context_compact(&m, &cc, NULL, NULL);
     int n1 = (int)json_object_array_length(m);
     long after = context_estimate_tokens(m);
 
@@ -146,7 +146,7 @@ static int test_tool_pairing(void)
     /* keep_recent = 1 makes the naive cut land on the tool result, which must
        be skipped so a call is never separated from its result. */
     ContextConfig cc = { 40, 1, 0 };
-    int dropped = context_compact(m, &cc, NULL, NULL);
+    int dropped = context_compact(&m, &cc, NULL, NULL);
     int fails = 0;
     if (dropped <= 0) {
         printf("FAIL tool pairing: nothing dropped (%d)\n", dropped);
@@ -187,7 +187,7 @@ static int test_summarize(void)
 
     ContextConfig cc = { 200, 4, 1 };
     int calls = 0;
-    int dropped = context_compact(m, &cc, fake_summary, &calls);
+    int dropped = context_compact(&m, &cc, fake_summary, &calls);
 
     int fails = 0;
     if (calls != 1) {
@@ -228,7 +228,7 @@ static int test_summarize_fallback(void)
 
     /* summarize requested but the callback fails: fall back to truncation */
     ContextConfig cc = { 200, 4, 1 };
-    int dropped = context_compact(m, &cc, NULL, NULL);
+    int dropped = context_compact(&m, &cc, NULL, NULL);
     int fails = 0;
     if (dropped <= 0) {
         printf("FAIL fallback: nothing dropped\n");

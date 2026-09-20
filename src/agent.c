@@ -303,11 +303,11 @@ static char *summarize_prefix(json_object *dropped, void *userdata)
     return summary;
 }
 
-static void context_maybe_compact(AgentConfig *cfg, json_object *messages, const char *url)
+static void context_maybe_compact(AgentConfig *cfg, json_object **messages, const char *url)
 {
     if (cfg->context_max_tokens <= 0)
         return;
-    if (context_estimate_tokens(messages) <= cfg->context_max_tokens)
+    if (context_estimate_tokens(*messages) <= cfg->context_max_tokens)
         return;
 
     ContextConfig cc;
@@ -326,7 +326,7 @@ static void context_maybe_compact(AgentConfig *cfg, json_object *messages, const
         fprintf(stderr,
                 "\033[1;33m[context]\033[0m dropped %d older message%s, now ~%ld tokens\n",
                 dropped, dropped == 1 ? "" : "s",
-                context_estimate_tokens(messages));
+                context_estimate_tokens(*messages));
 }
 
 static json_object *merge_loaded_messages(AgentConfig *cfg, json_object *loaded)
@@ -781,7 +781,7 @@ static void stream_end_line(const StreamState *st)
     }
 }
 
-static int run_turn(AgentConfig *cfg, json_object *messages, const char *url,
+static int run_turn(AgentConfig *cfg, json_object **messagesp, const char *url,
                     UsageTotals *usage)
 {
     interrupt_clear();
@@ -794,7 +794,8 @@ static int run_turn(AgentConfig *cfg, json_object *messages, const char *url,
         if (interrupt_pending())
             return TURN_INTERRUPTED;
 
-        context_maybe_compact(cfg, messages, url);
+        context_maybe_compact(cfg, messagesp, url);
+        json_object *messages = *messagesp;
 
         json_object *req = build_request(cfg, messages);
         const char *body = json_object_to_json_string_ext(req, JSON_C_TO_STRING_PLAIN);
@@ -950,7 +951,7 @@ static int run_turn(AgentConfig *cfg, json_object *messages, const char *url,
     }
 }
 
-static int run_turn_with_redirect(AgentConfig *cfg, json_object *messages,
+static int run_turn_with_redirect(AgentConfig *cfg, json_object **messages,
                                   const char *url, UsageTotals *usage)
 {
     while (1) {
@@ -975,7 +976,7 @@ static int run_turn_with_redirect(AgentConfig *cfg, json_object *messages,
         json_object *um = json_object_new_object();
         json_object_object_add(um, "role", json_object_new_string("user"));
         json_object_object_add(um, "content", json_object_new_string(line));
-        json_object_array_add(messages, um);
+        json_object_array_add(*messages, um);
         free(line);
         interrupt_clear();
     }
@@ -1042,7 +1043,7 @@ int agent_run(AgentConfig *cfg)
         json_object_object_add(um, "content",
                                json_object_new_string(cfg->initial_prompt));
         json_object_array_add(messages, um);
-        run_turn_with_redirect(cfg, messages, url, &usage);
+        run_turn_with_redirect(cfg, &messages, url, &usage);
         session_save(session_name, cfg->model, messages);
 
         if (cfg->non_interactive) {
@@ -1082,7 +1083,7 @@ int agent_run(AgentConfig *cfg)
         json_object_array_add(messages, um);
         free(line);
 
-        run_turn_with_redirect(cfg, messages, url, &usage);
+        run_turn_with_redirect(cfg, &messages, url, &usage);
         session_save(session_name, cfg->model, messages);
     }
 

@@ -94,10 +94,17 @@ static int choose_cut(json_object *messages, int n, long budget, int keep_recent
     return cut;
 }
 
-int context_compact(json_object *messages, const ContextConfig *cfg,
+/*
+ * json-c 0.12 has no way to delete or insert an element, so the kept messages
+ * are copied into a fresh array and the old one is released.
+ */
+int context_compact(json_object **messagesp, const ContextConfig *cfg,
                     ContextSummarizeFn summarize, void *userdata)
 {
-    if (!messages || json_object_get_type(messages) != json_type_array || !cfg)
+    if (!messagesp || !cfg)
+        return 0;
+    json_object *messages = *messagesp;
+    if (!messages || json_object_get_type(messages) != json_type_array)
         return 0;
     if (cfg->max_tokens <= 0)
         return 0;
@@ -127,11 +134,16 @@ int context_compact(json_object *messages, const ContextConfig *cfg,
     char *summary = NULL;
     if (cfg->summarize && summarize)
         summary = summarize(doomed, userdata);
-
-    json_object_array_del_idx(messages, 1, (size_t)dropped);
     if (doomed)
         json_object_put(doomed);
 
+    json_object *fresh = json_object_new_array();
+    if (!fresh) {
+        free(summary);
+        return 0;
+    }
+
+    json_object_array_add(fresh, json_object_get(json_object_array_get_idx(messages, 0)));
     if (summary && *summary) {
         json_object *sm = json_object_new_object();
         json_object_object_add(sm, "role", json_object_new_string("system"));
@@ -141,8 +153,13 @@ int context_compact(json_object *messages, const ContextConfig *cfg,
         json_object_object_add(sm, "content",
                                json_object_new_string(content ? content : summary));
         free(content);
-        json_object_array_insert_idx(messages, 1, sm);
+        json_object_array_add(fresh, sm);
     }
+    for (int i = cut; i < n; i++)
+        json_object_array_add(fresh, json_object_get(json_object_array_get_idx(messages, i)));
     free(summary);
+
+    json_object_put(messages);
+    *messagesp = fresh;
     return dropped;
 }
