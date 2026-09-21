@@ -583,6 +583,26 @@ static void shell_signal_handler(int sig)
     g_shell_signaled = 1;
 }
 
+/*
+ * A command can hand the terminal lcode shares with it to a process group of
+ * its own (gdb does exactly that for the program it debugs), which leaves
+ * lcode in the background: reading the terminal then fails and termios changes
+ * are refused. Take the terminal back, the way a shell does once the job it
+ * waited for is gone. The caller runs this before restoring the saved terminal
+ * state, so that the restore itself is accepted.
+ */
+static void reclaim_terminal(void)
+{
+    if (!isatty(STDIN_FILENO))
+        return;
+
+    pid_t fg = tcgetpgrp(STDIN_FILENO);
+    if (fg < 0 || fg == getpgrp())
+        return;
+
+    tcsetpgrp(STDIN_FILENO, getpgrp());
+}
+
 int tools_output_streamed(void)
 {
     return g_last_output_streamed;
@@ -706,6 +726,32 @@ static char *tool_run_shell(json_object *args)
 
     if (pid == 0) {
         setpgid(0, 0);
+
+        /*
+         * Keep the command away from the terminal lcode shares with it. The
+         * command runs in its own (background) process group, so reading the
+         * terminal would stop it with SIGTTIN, and a program that hands the
+         * terminal to a child of its own (gdb makes the program it debugs the
+         * foreground process group) would leave lcode itself in the background,
+         * where lcode's next read of stdin stops lcode mid-turn. A command that
+         * needs input should be fed a file or a pipe instead.
+         */
+        int devnull = open("/dev/null", O_RDONLY);
+        if (devnull >= 0) {
+            dup2(devnull, STDIN_FILENO);
+            if (devnull != STDIN_FILENO)
+                close(devnull);
+        }
+
+        /*
+         * lcode ignores SIGTTIN/SIGTTOU (see main.c) and catches SIGINT for
+         * itself while a command runs, so give the command the default
+         * dispositions it expects.
+         */
+        signal(SIGTTIN, SIG_DFL);
+        signal(SIGTTOU, SIG_DFL);
+        signal(SIGINT, SIG_DFL);
+
         close(fds[0]);
         dup2(fds[1], STDOUT_FILENO);
         dup2(fds[1], STDERR_FILENO);
@@ -816,6 +862,8 @@ static char *tool_run_shell(json_object *args)
 
     if (have_thread)
         pthread_join(th, NULL);
+
+    reclaim_terminal();
 
     if (streamed)
         display_drain(&job, &ds, 1);
@@ -1377,7 +1425,9 @@ json_object *tools_schema(void)
                                            "configured default, 0 to disable the timeout"));
     json_object_array_add(tools, make_tool(
         "run_shell",
-        "Run a shell command and return its combined output and exit status. If it runs "
+        "Run a shell command and return its combined output and exit status. The "
+        "command's stdin is /dev/null and it has no terminal, so never use it for an "
+        "interactive program: feed input through a file or a pipe instead. If it runs "
         "longer than the timeout it is killed and the output is reported as timed out. "
         "Potentially destructive commands (for example recursive deletes, piping a "
         "download into a shell, or writing outside the trusted directories) require the "

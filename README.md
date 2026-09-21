@@ -23,7 +23,9 @@ A command-line coding agent written in C. It talks to DeepSeek's OpenAI-compatib
   - `list_dir` — list directory entries (type and size)
   - `run_shell` — run a shell command and return its output and exit code; an optional
     `timeout` argument (seconds) kills the command's process group if it runs too long,
-    otherwise the default from `--shell-timeout` / `LCODE_SHELL_TIMEOUT` applies
+    otherwise the default from `--shell-timeout` / `LCODE_SHELL_TIMEOUT` applies. The command
+    runs with `/dev/null` on `stdin` and never gets a turn on the terminal, so it cannot ask
+    you anything (feed input through a file or a pipe)
   - `ask_user` — show an interactive menu when the user must choose among several options (arrow/number keys to select, `Enter` to confirm, `q`/`Esc` to cancel; falls back to numbered input when not attached to a TTY)
     - With `--non-interactive` (or `-y`) no menu is shown; the decision is handed back to the model, which picks for itself and completes the task silently
 - Skills: automatically discover skills (`SKILL.md`) from convention directories, list them in the system prompt, and let the model load a skill's full instructions on demand through the `skill` tool
@@ -260,6 +262,19 @@ them all with `--reset-permissions`.
 In non-interactive mode (`--non-interactive`) there is no one to confirm, so risky commands are
 refused; pass `--allow-dangerous` to run commands without the confirmation policy for that run.
 Use it only when you fully trust the model and the task.
+
+## Shell commands and the terminal
+
+A `run_shell` command runs in its own process group with `/dev/null` on `stdin`: it cannot read what
+you type and cannot compete with lcode's `ESC` handling. Feed it a file or a pipe when it needs
+input, and run interactive programs (`less`, `top`, an editor, `gdb`) in your own shell instead.
+
+That matters most for a program that takes the terminal over: `gdb -ex=r ./prog` makes the program it
+debugs the foreground process group of the terminal it shares with its caller, which leaves lcode in
+the background — the kernel then stops lcode with `SIGTTIN` the next time it reads the terminal, and
+the command looks hung until its timeout kills it. lcode ignores those two terminal signals
+(`SIGTTIN`/`SIGTTOU`) so no command can stop it, and takes the terminal's foreground process group
+back after every command so its own input keeps working.
 
 ## Session management
 

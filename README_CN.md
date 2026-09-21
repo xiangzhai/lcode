@@ -24,7 +24,8 @@
     只匹配一处（传 `replace_all` 可替换全部）。修改现有文件的局部时优先用它而不是 `write_file`
   - `list_dir` — 列出目录条目（类型与大小）
   - `run_shell` — 运行 shell 命令并返回输出与退出码；可选参数 `timeout`（秒）在命令
-    运行过久时杀掉其进程组，否则套用 `--shell-timeout` / `LCODE_SHELL_TIMEOUT` 的默认值
+    运行过久时杀掉其进程组，否则套用 `--shell-timeout` / `LCODE_SHELL_TIMEOUT` 的默认值。
+    命令的 `stdin` 指向 `/dev/null`，也不会占用终端，因此无法向你提问（需要输入时请接文件或管道）
   - `ask_user` — 当用户需要在多个选项中做出选择时显示交互式菜单（用方向键/数字键选择，`Enter` 确认，`q`/`Esc` 取消；在非 TTY 环境下回退为数字输入）
     - 使用 `--non-interactive`（或 `-y`）时不显示菜单；决策交还给模型，由模型自行选择并静默完成任务
 - 技能（Skills）：自动从约定目录中发现技能（`SKILL.md`），在系统提示中列出，并让模型按需通过 `skill` 工具加载技能的完整指令
@@ -237,6 +238,17 @@ Trust this directory and its contents? [y/N]
 
 在非交互模式（`--non-interactive`）下无人可以确认，危险命令会被拒绝；传入 `--allow-dangerous`
 可在本次运行中跳过确认策略——仅在你完全信任模型与任务时使用。
+
+## Shell 命令与终端
+
+`run_shell` 执行的命令运行在独立的进程组中，`stdin` 指向 `/dev/null`：它读不到你的按键，也不会与
+lcode 的 `ESC` 处理相互争抢。命令需要输入时请把它接到文件或管道上；交互式程序（`less`、`top`、
+编辑器、`gdb`）请在你自己的 shell 中运行。
+
+这对会“抢占”终端的程序尤其重要：`gdb -ex=r ./prog` 会把被调试程序设为双方共用终端的前台进程组，
+使 lcode 落入后台——内核随后会在 lcode 再一次读取终端时用 `SIGTTIN` 停止它，命令看起来就像卡住，
+直到超时被杀。lcode 现在忽略这两个终端信号（`SIGTTIN`/`SIGTTOU`），使任何命令都无法让它停下来，
+并在每条命令结束后收回终端的前台进程组，保证自己的输入始终可用。
 
 ## 会话管理
 

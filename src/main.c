@@ -9,6 +9,7 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -189,6 +190,17 @@ static int ensure_trust(int non_interactive, int force_trust)
 
 int main(int argc, char **argv)
 {
+    /*
+     * lcode shares its terminal with the commands it runs. A command that puts
+     * its own process group in the foreground of that terminal (gdb does it for
+     * the program it debugs) leaves lcode in the background, where reading
+     * stdin raises SIGTTIN and stops lcode without a trace. Ignore both
+     * terminal signals so lcode keeps running and can take the terminal back in
+     * run_shell, which also hands the default dispositions to every command.
+     */
+    signal(SIGTTIN, SIG_IGN);
+    signal(SIGTTOU, SIG_IGN);
+
     AgentConfig cfg;
     cfg.api_key = getenv("DEEPSEEK_API_KEY");
     cfg.base_url = env_or("DEEPSEEK_BASE_URL", "https://api.deepseek.com");
